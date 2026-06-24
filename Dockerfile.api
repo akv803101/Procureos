@@ -1,0 +1,22 @@
+# API container — FastAPI HTTP server only.
+# Fix 09: the APScheduler worker is a SEPARATE container (see Dockerfile.worker).
+# This image must never start the scheduler.
+FROM python:3.12-slim
+
+# psycopg2-binary + cryptography need build basics; slim image omits them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements first so dependency layer is cached across code changes.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+# docker-compose overrides this with --reload for local dev.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

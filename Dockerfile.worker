@@ -1,0 +1,20 @@
+# Worker container — APScheduler background jobs ONLY.
+# Fix 09 (binding): the scheduler runs as its own process, never inside the
+# FastAPI/Gunicorn workers. Running it here in a dedicated container is what
+# guarantees that. The scheduler uses a Supabase-backed job store with
+# coalesce=True, max_instances=1 (configured in worker/main.py).
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# No port exposed — the worker serves no HTTP traffic.
+CMD ["python", "-m", "worker.main"]
