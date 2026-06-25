@@ -20,6 +20,13 @@ from typing import Protocol
 from core.refcodes import ref_code
 
 
+def _digits(p: str | None) -> str:
+    """Canonical phone key — digits only. WhatsApp delivers the sender as bare
+    E.164 (e.g. '919...') while seeds store '+919...'; match on digits so they
+    line up regardless of '+'/spaces/dashes."""
+    return "".join(ch for ch in (p or "") if ch.isdigit())
+
+
 @dataclass
 class Budget:
     limit: float
@@ -154,6 +161,7 @@ class Store(Protocol):
     async def get_known_vendors(self, category: str, city: str) -> dict: ...
     async def upsert_vendor(self, vendor: dict) -> str: ...          # returns vendors.id (Fix 08: dedup by google_place_id)
     async def get_vendor_id_by_phone(self, phone: str) -> str | None: ...
+    async def get_demo_vendors(self, category: str, city: str) -> list[dict]: ...   # seeded vendors for DEMO_MODE
 
 
 class InMemoryStore:
@@ -196,6 +204,9 @@ class InMemoryStore:
         return self._spent.get((company_id, category), 0.0)
 
     async def record_spend(self, company_id: str, category: str, amount: float, order_id: str) -> None:
+        # Idempotent per order: a Fix-01 duplicate-recovery retry must not debit twice.
+        if any(r["order_id"] == order_id for r in self.spend_records):
+            return
         self._spent[(company_id, category)] = self._spent.get((company_id, category), 0.0) + amount
         self.spend_records.append(
             {"company_id": company_id, "category": category, "amount": amount, "order_id": order_id}
@@ -345,11 +356,19 @@ class InMemoryStore:
                 self._vendor_by_place[pid] = vid
         self._vendors[vid] = {**vendor, "id": vid}
         if vendor.get("phone"):
-            self._vendor_by_phone[vendor["phone"]] = vid
+            self._vendor_by_phone[_digits(vendor["phone"])] = vid
         return vid
 
     async def get_vendor_id_by_phone(self, phone: str) -> str | None:
-        return self._vendor_by_phone.get(phone)
+        return self._vendor_by_phone.get(_digits(phone))
+
+    async def get_demo_vendors(self, category: str, city: str) -> list[dict]:
+        # Match by category only — demo seeds are few, and a locality in the goal
+        # ("Koramangala") shouldn't exclude a vendor seeded as "Bengaluru".
+        return [{"google_place_id": v.get("google_place_id"), "name": v.get("name"),
+                 "phone": v.get("phone"), "vendor_id": vid, "google_rating": v.get("google_rating"),
+                 "city": v.get("city"), "source": "agent_found"}
+                for vid, v in self._vendors.items() if v.get("category") == category]
 
 
 def _f(v):
@@ -459,9 +478,11 @@ class SupabaseStore:
         return float(v or 0)
 
     async def record_spend(self, company_id, category, amount, order_id) -> None:
+        # ON CONFLICT keeps the ledger idempotent per order (Fix 01 retry safety).
         await self._exec(
             "INSERT INTO spend_records (company_id, category, amount, order_id) "
-            "VALUES ($1::uuid, $2, $3, $4::uuid)", company_id, category, amount, order_id)
+            "VALUES ($1::uuid, $2, $3, $4::uuid) ON CONFLICT (order_id) DO NOTHING",
+            company_id, category, amount, order_id)
 
     # ── goals ─────────────────────────────────────────────────────────────────
     async def create_goal(self, goal: Goal) -> str:
@@ -688,5 +709,17 @@ class SupabaseStore:
         return str(new_id)
 
     async def get_vendor_id_by_phone(self, phone: str) -> str | None:
-        v = await self._val("SELECT id FROM vendors WHERE phone=$1 LIMIT 1", phone)
+        # Match on digits only so '+919...' (stored) lines up with '919...' (inbound).
+        v = await self._val(
+            "SELECT id FROM vendors WHERE regexp_replace(phone, '[^0-9]', '', 'g') = $1 LIMIT 1",
+            _digits(phone))
         return str(v) if v else None
+
+    async def get_demo_vendors(self, category: str, city: str) -> list[dict]:
+        # Category only (see InMemoryStore note): locality vs city must not exclude.
+        rows = await self._rows(
+            "SELECT id, google_place_id, name, phone, google_rating, city FROM vendors "
+            "WHERE category=$1 ORDER BY created_at LIMIT 5", category)
+        return [{"google_place_id": r["google_place_id"], "name": r["name"], "phone": r["phone"],
+                 "vendor_id": str(r["id"]), "google_rating": _f(r["google_rating"]),
+                 "city": r["city"], "source": "agent_found"} for r in rows]

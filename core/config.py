@@ -52,9 +52,18 @@ class Settings(BaseSettings):
     volopay_webhook_secret: str = ""
     volopay_team_id: str = ""
 
+    # Payments (Razorpay test mode)
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
     # Slack
     slack_bot_token: str = ""
     slack_signing_secret: str = ""   # Fix 11 — HMAC verification of Slack webhooks
+
+    # Demo: discover from seeded vendors instead of live Google Places, so RFQs
+    # only reach your own seeded number(s) — never real strangers' WhatsApp.
+    demo_mode: bool = False
 
     # Monitoring
     sentry_dsn: str = ""

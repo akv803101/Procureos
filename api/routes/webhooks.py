@@ -23,8 +23,9 @@ from core.errors import BudgetExceededError, OptionNotFoundError, StateConflictE
 from core.store import get_store
 from core.waba_handlers import DefaultWabaHandlers
 from core.waba_router import route_incoming_whatsapp
+from services.razorpay import verify_razorpay_signature
 from services.slack_notifier import APPROVE_ACTION_ID, REJECT_ACTION_ID, verify_slack_signature
-from services.whatsapp import verify_meta_signature
+from services.whatsapp import normalize_inbound, verify_meta_signature
 
 router = APIRouter(tags=["webhooks"])
 log = logging.getLogger(__name__)
@@ -45,13 +46,16 @@ async def slack_webhook(request: Request):
     if not payload_raw:
         return ok({"ignored": "no interactive payload"})
 
-    payload = json.loads(payload_raw)
+    try:
+        payload = json.loads(payload_raw)
+        value = json.loads(payload.get("actions", [{}])[0].get("value", "{}"))
+    except (json.JSONDecodeError, IndexError):
+        return JSONResponse(err("bad_payload", "malformed Slack interactive payload"), status_code=400)
     actions = payload.get("actions", [])
     if not actions:
         return ok({"ignored": "no actions"})
 
     action = actions[0]
-    value = json.loads(action.get("value", "{}"))
     goal_id = value.get("goal_id")
     action_id = action.get("action_id")
 
@@ -95,7 +99,30 @@ async def whatsapp_inbound(request: Request):
         payload = json.loads(raw.decode() or "{}")
     except json.JSONDecodeError:
         return JSONResponse(err("bad_payload", "request body is not valid JSON"), status_code=400)
+
+    event = normalize_inbound(payload)   # Meta/Chat-Mitra shape -> flat {from,text,type,interactive}
+    if not event.get("from"):
+        return ok({"ignored": "non-message event (status receipt or unrecognized shape)"})
+
     store = get_store()
     handlers = DefaultWabaHandlers(store=store, redis=get_redis())
-    result = await route_incoming_whatsapp(payload, handlers=handlers, store=store)
+    result = await route_incoming_whatsapp(event, handlers=handlers, store=store)
     return ok(result)
+
+
+@router.post("/webhook/payment")
+async def payment_webhook(request: Request):
+    """Razorpay payment webhook (HMAC-verified, X-Razorpay-Signature on raw body).
+    Confirms capture asynchronously; the goal already advanced at approval, so this
+    is the real-money confirmation + audit point."""
+    raw = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    if not verify_razorpay_signature(body=raw, signature_header=signature):
+        return JSONResponse(err("invalid_signature", "Razorpay signature verification failed"), status_code=401)
+    try:
+        event = json.loads(raw.decode() or "{}")
+    except json.JSONDecodeError:
+        return JSONResponse(err("bad_payload", "request body is not valid JSON"), status_code=400)
+    etype = event.get("event")
+    log.info("razorpay webhook received: %s", etype)
+    return ok({"received": etype})

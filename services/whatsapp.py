@@ -98,3 +98,41 @@ async def _default_send_buttons(to: str, body: str, buttons: list[dict]) -> dict
         resp = await client.post(f"{settings.chat_mitra_base_url}/messages", headers=headers, json=payload)
         resp.raise_for_status()
         return resp.json()
+
+
+def normalize_inbound(payload: dict) -> dict:
+    """Normalize a provider WhatsApp webhook to the flat shape waba_router (Fix 06)
+    expects: {from, text, type, interactive}.
+
+    Handles the Meta WhatsApp Cloud API nested shape
+    (entry[].changes[].value.messages[]) that Chat Mitra proxies under your Meta
+    Business Manager. If the payload is already flat (some BSPs post that
+    directly), it's returned unchanged. Returns {} for non-message events
+    (delivery/read status receipts) so the route can ignore them.
+
+    If Chat Mitra's exact inbound shape differs from Meta's, THIS is the only
+    function that changes — the router and handlers are unaffected.
+    """
+    if payload.get("from"):
+        return payload  # already flat
+    try:
+        value = payload["entry"][0]["changes"][0]["value"]
+    except (KeyError, IndexError, TypeError):
+        return {}
+    messages = value.get("messages") or []
+    if not messages:
+        return {}  # status receipt or other non-message event
+    m = messages[0]
+    out = {"from": m.get("from"), "type": m.get("type", "text"),
+           "text": (m.get("text") or {}).get("body", "")}
+    if m.get("type") == "interactive":
+        out["interactive"] = m.get("interactive")
+    elif m.get("type") == "button":
+        # Template quick-reply tap (sent outside the 24h session window): the id is
+        # in button.payload, label in button.text. Route it like a button_reply so
+        # the rating/delivery prefixes still match.
+        btn = m.get("button") or {}
+        out["type"] = "interactive"
+        out["interactive"] = {"button_reply": {"id": btn.get("payload") or ""}}
+        out["text"] = btn.get("text", "")
+    return out

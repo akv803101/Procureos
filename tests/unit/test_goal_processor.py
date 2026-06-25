@@ -1,4 +1,5 @@
 """GoalProcessor capstone: discover+dispatch, quote collection -> rank -> approval."""
+import agents.orchestrator as orch
 import core.waba_handlers as waba_handlers
 from agents.orchestrator import on_quote_collected, process_goal
 from agents.specialist.places_agent import PlacesAgent
@@ -34,6 +35,27 @@ async def test_process_goal_discovers_and_dispatches():
     assert res["dispatched"] == 2
     assert len(sent) == 2
     assert await store.get_goal_state("g1") == "pending_rfq"
+
+
+async def test_process_goal_demo_mode_uses_seeded_vendors(monkeypatch):
+    # DEMO_MODE: discovery returns seeded vendors (your numbers), not live Places.
+    monkeypatch.setattr(orch.settings, "demo_mode", True)
+    goal = Goal(id="g1", status="processing", category="fb", company_id="c1",
+                raw_input="snacks", parsed_intent={"category": "fb", "location": "Bengaluru"})
+    store = InMemoryStore(goals={"g1": goal}, companies={"c1": _company()})
+    await store.upsert_vendor({"google_place_id": "gp1", "name": "A", "phone": "+9111",
+                               "category": "fb", "city": "Bengaluru"})
+    await store.upsert_vendor({"google_place_id": "gp2", "name": "B", "phone": "+9122",
+                               "category": "fb", "city": "Bengaluru"})
+    sent = []
+
+    async def wsend(to, body):
+        sent.append(to); return {"ok": True}
+
+    res = await process_goal("g1", store=store, redis=FakeRedis(),
+                             router=FakeRouter(text="rfq"), whatsapp_send_fn=wsend)
+    assert res["status"] == "pending_rfq" and res["dispatched"] == 2
+    assert set(sent) == {"+9111", "+9122"}
 
 
 async def test_process_goal_no_vendors_escalates():
@@ -123,6 +145,7 @@ async def test_upsert_vendor_dedups_by_place_id_and_resolves_phone():
     v2 = await store.upsert_vendor({"google_place_id": "p2", "name": "B", "phone": "+9122"})
     assert v1 == v1_again and v1 != v2                 # dedup by google_place_id (Fix 08)
     assert await store.get_vendor_id_by_phone("+9111") == v1
+    assert await store.get_vendor_id_by_phone("9111") == v1     # bare-digit inbound still matches '+9111'
     assert await store.get_vendor_id_by_phone("+9999") is None
 
 

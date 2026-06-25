@@ -41,7 +41,9 @@ async def route_incoming_whatsapp(payload: dict, *, handlers: WabaHandlers, stor
 
     # ── P1: interactive button taps (ratings, delivery confirmation) ─────────
     if payload.get("type") == "interactive":
-        button_id = payload.get("interactive", {}).get("button_reply", {}).get("id", "")
+        inter = payload.get("interactive", {})
+        # Accept either a reply-button or a list pick (both carry an id).
+        button_id = (inter.get("button_reply") or inter.get("list_reply") or {}).get("id", "")
         if button_id.startswith("rate_good_") or button_id.startswith("rate_bad_"):
             rating_id = button_id.split("_", 2)[-1]
             return await handlers.handle_employee_rating(rating_id, button_id)

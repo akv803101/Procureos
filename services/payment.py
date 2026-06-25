@@ -14,9 +14,22 @@ import asyncio
 import hashlib
 import logging
 
+from core.config import settings
 from core.errors import PaymentDuplicateError
 
 log = logging.getLogger(__name__)
+
+
+def get_payment_client():
+    """Return the configured payment client. Razorpay (test mode) when its keys
+    are set; this is the default the payment functions use when no client is
+    injected. Tests always inject a fake client explicitly."""
+    if settings.razorpay_key_id and settings.razorpay_key_secret:
+        from services.razorpay import RazorpayClient
+        return RazorpayClient()
+    raise NotImplementedError(
+        "No payment provider configured — set RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET in .env"
+    )
 
 # Fix 01 retry policy (binding constants).
 MAX_RETRIES = 3
@@ -48,7 +61,7 @@ def issue_volopay_payment(order_id: str, amount: float, vendor_id: str, *, clien
     do NOT pay again); otherwise raise PaymentDuplicateError so a human resolves
     the unknown state rather than the system blindly retrying.
     """
-    client = client or get_volopay_client()
+    client = client or get_payment_client()
     idempotency_key = payment_idempotency_key(order_id)
 
     response = client.create_payment(

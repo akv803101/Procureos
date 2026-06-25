@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS spend_records (
 CREATE INDEX IF NOT EXISTS idx_spend_company_category_month
     ON spend_records (company_id, category, created_at);
 
+-- One ledger row per order — makes record_spend idempotent (ON CONFLICT DO
+-- NOTHING) so a Fix-01 duplicate-recovery retry can't debit the budget twice.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_spend_order ON spend_records (order_id);
+
 -- Backend-only table (written under the Fix 02 lock). RLS on with no
 -- authenticated policy => only the service role (BYPASSRLS) can touch it.
 ALTER TABLE spend_records ENABLE ROW LEVEL SECURITY;

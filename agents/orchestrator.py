@@ -16,6 +16,7 @@ from agents.prompts.intent_parser import INTENT_PARSER_PROMPT
 from agents.prompts.rfq_generator import RFQ_GENERATOR_PROMPT
 from agents.specialist.option_ranker import rank_options
 from agents.specialist.places_agent import PlacesAgent
+from core.config import settings
 from core.db import Store, SupabaseStore
 from core.refcodes import ref_code
 from core.state_machine import GoalState, transition_goal_state
@@ -124,9 +125,16 @@ async def process_goal(goal_id: str, *, store: Store | None = None, redis=None,
     goal = await store.get_goal(goal_id)
     intent = goal.parsed_intent or {}
 
-    # Cross-check the internal vendor graph so rated vendors rank first (PRD).
-    agent = places_agent or PlacesAgent(known_vendors_fn=store.get_known_vendors)
-    vendors = await agent.search(intent, limit=3)
+    # Discovery: an injected agent (tests) wins; else demo_mode uses seeded vendors
+    # so RFQs only reach your own number(s); else live Google Places + vendor graph.
+    if places_agent is not None:
+        vendors = await places_agent.search(intent, limit=3)
+    elif settings.demo_mode:
+        vendors = await store.get_demo_vendors(intent.get("category") or "generic",
+                                               intent.get("location") or intent.get("destination") or "")
+        log.info("[%s] demo_mode discovery: %d seeded vendor(s)", goal_id, len(vendors))
+    else:
+        vendors = await PlacesAgent(known_vendors_fn=store.get_known_vendors).search(intent, limit=3)
     if not vendors:
         await transition_goal_state(goal_id, GoalState.PROCESSING, GoalState.OPERATOR_ESCALATED,
                                     store=store, redis=redis)

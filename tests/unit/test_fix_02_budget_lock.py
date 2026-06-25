@@ -65,6 +65,15 @@ async def test_concurrent_payment_on_same_category_is_locked_out():
             )
 
 
+async def test_record_spend_is_idempotent_per_order():
+    # A Fix-01 duplicate-recovery retry calls record_spend again for the same
+    # order — the ledger must debit only once.
+    store = _store(limit=20000, spent=0)
+    await store.record_spend("co-1", "fb", 15000, "order-1")
+    await store.record_spend("co-1", "fb", 15000, "order-1")   # retry, same order
+    assert await store.get_spent_this_period("co-1", "fb") == 15000
+
+
 async def test_lock_is_released_after_use_so_next_payment_proceeds():
     store = _store()
     redis = FakeRedis()
