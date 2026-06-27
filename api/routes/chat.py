@@ -59,8 +59,21 @@ live counter); delivery time on the day; any setup / crockery / staff.
 - hotel: city, check-in/out dates, rooms, star rating, key amenities.
 - flights: route, dates, passengers, cabin class.
 
-Answer the employee's questions. If something can only be confirmed by the vendor \
-(e.g. "do they serve non-veg?"), note it as a requirement — do NOT restart.
+GROUNDED VETTING: after find_vendors you receive each vendor's phone, address, website, \
+rating + review count, business status, AND a Google AI "review summary" (a digest of what \
+reviewers say about quality, service, timeliness). USE this data — you DO have their \
+contact details, so never say you can't show them. When asked about quality, delivery, \
+after-sales or complaints, READ the review summary and give a grounded, comparative answer: \
+cite what each summary says, call out any weak/negative service or delivery signals, and \
+rank who looks strongest for THIS order. Frame it as "based on Google's review summary" — \
+it's a balanced AI digest, not raw complaint logs, so if they want hard complaint detail, \
+offer the vendor's reviews link (website / Google listing). If a vendor has no summary or \
+weak signals, say so honestly. If the employee won't deal with negative-service vendors, \
+proactively set aside any with concerning signals and explain why.
+
+Answer the employee's questions. If something genuinely can't be known from the data \
+(e.g. exact warranty SLA, live availability), say so honestly and offer to put it in the \
+RFQ as a question to the vendor — do NOT restart the conversation.
 
 When you have the mandatory fields AND the key attributes, craft a FOCUSED Google search \
 phrase in `search_terms` reflecting them (e.g. "non-veg North Indian corporate caterers") \
@@ -121,21 +134,41 @@ def _clean_name(name: str) -> str:
     return (n[:48] if n else (name or "")).strip()
 
 
+def _vendor_block(i: int, v: dict) -> str:
+    """A grounded text block per vendor (contacts + recent review snippets) so the
+    agent can answer contact questions and assess sentiment from real review text."""
+    lines = [
+        f"{i}. {_clean_name(v.get('name'))} | phone: {v.get('phone') or 'n/a'} | "
+        f"rating: {v.get('google_rating')} ({v.get('review_count')} reviews) | "
+        f"status: {v.get('business_status') or 'n/a'} | addr: {v.get('address') or 'n/a'}"
+    ]
+    if v.get("website"):
+        lines.append(f"   website: {v['website']}")
+    summary = v.get("review_summary")
+    lines.append(f"   review summary (Google AI digest of reviews): {summary}" if summary
+                 else "   review summary: none returned")
+    return "\n".join(lines)
+
+
 async def _find_vendors(args: dict) -> tuple[str, dict]:
-    """Run live discovery + draft the RFQ. Returns (summary_for_model, ui_data)."""
+    """Run live discovery + draft the RFQ. Returns (grounded_text_for_model, ui_data)."""
     intent = _intent_from_args(args)
     agent = PlacesAgent(known_vendors_fn=get_store().get_known_vendors)
     vendors = await agent.search(intent, limit=TOP_N)
     cards = [{"name": _clean_name(v.get("name")), "phone": v.get("phone"), "rating": v.get("google_rating"),
-              "reviews": v.get("review_count"), "address": v.get("address")} for v in vendors]
+              "reviews": v.get("review_count"), "address": v.get("address"), "website": v.get("website"),
+              "summary": v.get("review_summary")}
+             for v in vendors]
     rfq = None
     reachable = [v for v in vendors if v.get("phone")]
     if reachable:
         params = _rfq_template_params(_clean_name(reachable[0]["name"]), intent, ref_code_for_goal("chat-demo"))
         rfq = TEMPLATE_BODY.format(*params)
-    summary = (f"Found {len(cards)} verified vendors: "
-               + "; ".join(f"{c['name']} (⭐{c['rating']}, {c['reviews']} reviews)" for c in cards)
-               + ". A draft RFQ to the top vendor is ready. (These are shown to the user as cards.)")
+    blocks = "\n\n".join(_vendor_block(i, v) for i, v in enumerate(vendors, 1))
+    summary = (f"Found {len(vendors)} verified vendors. Full details + recent review snippets "
+               f"below — USE these to answer contact questions and to assess sentiment / "
+               f"complaints (reviews are a small recent sample, not the full history). A draft "
+               f"RFQ to the top vendor is ready (shown to the user as cards).\n\n{blocks}")
     return summary, {"vendors": cards, "rfq": rfq}
 
 
@@ -236,7 +269,10 @@ _CHAT_HTML = """<!doctype html>
   function vendorsHtml(vs){ if(!vs||!vs.length) return '';
     return '<div class="vendors">'+vs.map((v,i)=>'<div class="v"><b>'+(i+1)+'. '+esc(v.name)+'</b>'
       +' <span class="meta">— '+(v.phone?esc(v.phone):'no phone')+' · ⭐'+(v.rating??'?')+' ('+(v.reviews??0)+')</span>'
-      +(v.address?'<div class="meta">'+esc(v.address)+'</div>':'')+'</div>').join('')+'</div>'; }
+      +(v.address?'<div class="meta">'+esc(v.address)+'</div>':'')
+      +(v.website?'<div class="meta"><a href="'+esc(v.website)+'" target="_blank" rel="noopener">'+esc(v.website)+'</a></div>':'')
+      +(v.summary?'<div class="meta" style="margin-top:5px;color:#aab6cc;font-style:italic">“'+esc(v.summary)+'”</div>':'')
+      +'</div>').join('')+'</div>'; }
   bubble('bot', "Hi! Tell me what you need to procure and I'll find vetted vendors.");
   f.onsubmit = async (e) => { e.preventDefault(); const text=m.value.trim(); if(!text) return;
     bubble('me', esc(text)); m.value=''; send.disabled=true;

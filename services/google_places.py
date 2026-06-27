@@ -15,17 +15,21 @@ from core.config import settings
 
 log = logging.getLogger(__name__)
 
-# Field mask: only request what we map below (keeps the call cheap).
+# Field mask: only request what we map below. NOTE: `places.reviewSummary` is an
+# Atmosphere-tier field (higher per-call cost) — it's Google's AI digest of the
+# place's reviews (sentiment on quality/service/timeliness) and is what powers
+# grounded vetting. (Individual `places.reviews` isn't entitled on this key.)
 _FIELD_MASK = (
     "places.id,places.displayName,places.formattedAddress,places.rating,"
     "places.userRatingCount,places.internationalPhoneNumber,"
-    "places.nationalPhoneNumber,places.websiteUri"
+    "places.nationalPhoneNumber,places.websiteUri,places.businessStatus,places.reviewSummary"
 )
 
 
 def _normalize(place: dict, city: str | None) -> dict:
     name = (place.get("displayName") or {}).get("text") or place.get("name", "")
     phone = place.get("internationalPhoneNumber") or place.get("nationalPhoneNumber")
+    review_summary = ((place.get("reviewSummary") or {}).get("text") or {}).get("text")
     return {
         "google_place_id": place.get("id"),
         "name": name,
@@ -35,6 +39,8 @@ def _normalize(place: dict, city: str | None) -> dict:
         "review_count": place.get("userRatingCount"),
         "phone": phone,
         "website": place.get("websiteUri"),
+        "business_status": place.get("businessStatus"),
+        "review_summary": review_summary,   # Google's AI digest of reviews (sentiment signal)
         "source": "google_places",
     }
 
