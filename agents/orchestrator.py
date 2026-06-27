@@ -106,11 +106,39 @@ def _human_needed_by(intent: dict) -> str:
             "flexible": "a flexible date"}.get(intent.get("urgency"), "this week")
 
 
+def clarifying_questions(intent: dict) -> list[dict]:
+    """Intake fields the agent must collect before contacting any vendor. Place and
+    delivery address are MANDATORY (a vendor can't quote/deliver without them);
+    budget is OPTIONAL (the company may skip it)."""
+    qs: list[dict] = []
+    if not (intent.get("location") or intent.get("destination")):
+        qs.append({"field": "location", "required": True,
+                   "ask": "Which city / area should this be delivered to?"})
+    if not intent.get("delivery_address"):
+        qs.append({"field": "delivery_address", "required": True,
+                   "ask": "What's the exact delivery address? (building, floor, area + landmark)"})
+    if not intent.get("budget_hint"):
+        qs.append({"field": "budget", "required": False,
+                   "ask": "Any budget cap for this? (optional — reply 'skip')"})
+    return qs
+
+
+def needs_clarification(intent: dict) -> bool:
+    """True if a MANDATORY intake field is missing. Budget never blocks."""
+    return any(q["required"] for q in clarifying_questions(intent))
+
+
+def _delivery_place(intent: dict) -> str:
+    """The most specific delivery location available — full address beats city."""
+    return (intent.get("delivery_address") or intent.get("location")
+            or intent.get("destination") or "Bengaluru")
+
+
 def _rfq_template_params(vendor_name: str, intent: dict, code: str) -> list[str]:
     """Fill rfq_first_contact_v1 body vars {{1}}..{{5}} in order:
-    vendor name, requirement, location, needed-by, quote ref."""
-    location = intent.get("location") or intent.get("destination") or "Bengaluru"
-    return [vendor_name, _human_requirement(intent), location, _human_needed_by(intent), code]
+    vendor name, requirement, delivery place, needed-by, quote ref."""
+    return [vendor_name, _human_requirement(intent), _delivery_place(intent),
+            _human_needed_by(intent), code]
 
 
 async def generate_rfq(vendor_name: str, intent: dict, ref_code: str, budget,
@@ -185,6 +213,14 @@ async def process_goal(goal_id: str, *, store: Store | None = None, redis=None,
     store = store or _default_store
     goal = await store.get_goal(goal_id)
     intent = goal.parsed_intent or {}
+
+    # Intake gate: never contact vendors without the mandatory fields (place +
+    # delivery address). The employee is asked these before discovery proceeds.
+    if needs_clarification(intent):
+        questions = clarifying_questions(intent)
+        log.info("[%s] needs clarification: %s", goal_id,
+                 [q["field"] for q in questions if q["required"]])
+        return {"goal_id": goal_id, "status": "needs_clarification", "questions": questions}
 
     # Discovery: an injected agent (tests) wins; else demo_mode uses seeded vendors
     # so RFQs only reach your own number(s); else live Google Places + vendor graph.

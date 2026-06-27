@@ -15,6 +15,7 @@ Return ONLY valid JSON with this exact structure:
   "quantity": number or null,
   "location": string or null,
   "destination": string or null,
+  "delivery_address": string or null,
   "budget_hint": number or null,
   "urgency": "asap" | "this_week" | "flexible",
   "gst_required": true | false,
@@ -37,5 +38,7 @@ Rules:
 - gst_required defaults to true for all B2B requests
 - quantity is number of people for F&B/travel, number of units for hardware
 - location is delivery city for non-travel, departure city for flights
+- delivery_address: the specific delivery address (building / floor / area / landmark)
+  only if the request states one; the word "office" alone is NOT an address -> null
 - Return ONLY JSON. No preamble, no explanation, no markdown.
 """

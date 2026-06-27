@@ -14,7 +14,9 @@ import sys
 from agents.orchestrator import (
     RFQ_TEMPLATE_NAME,
     _rfq_template_params,
+    clarifying_questions,
     generate_rfq,
+    needs_clarification,
     parse_intent,
     ref_code_for_goal,
 )
@@ -41,10 +43,19 @@ async def main(goal_text: str) -> None:
     intent = await parse_intent(goal_text, COMPANY_CITY)
     print("\n① PARSED INTENT (Groq)")
     for k in ("category", "subcategory", "quantity", "location", "destination",
-              "needed_by", "urgency", "gst_required", "budget_hint",
-              "special_requirements", "confidence"):
+              "delivery_address", "needed_by", "urgency", "gst_required",
+              "budget_hint", "special_requirements", "confidence"):
         if intent.get(k) not in (None, ""):
             print(f"     {k:20} = {intent[k]}")
+
+    # Intake gate — collect mandatory fields (place + delivery address) before
+    # contacting any vendor. Budget is optional. The agent asks the employee.
+    if needs_clarification(intent):
+        print("\n⚠️  AGENT ASKS THE EMPLOYEE FIRST (no vendors contacted yet):")
+        for q in clarifying_questions(intent):
+            print(f"     • [{'required' if q['required'] else 'optional'}] {q['ask']}")
+        print("\n   (add these details to the goal and re-run to see discovery + RFQ)")
+        return
 
     # 2) Discovery (live Google Places) + 3) vendor-graph ranking
     store = get_store()

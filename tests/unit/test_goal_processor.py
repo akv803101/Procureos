@@ -16,7 +16,8 @@ def _company():
 # ── process_goal: discovery + dispatch ──────────────────────────────────────
 async def test_process_goal_discovers_and_dispatches():
     goal = Goal(id="g1", status="processing", category="fb", company_id="c1",
-                raw_input="snacks for 50", parsed_intent={"category": "fb", "location": "BLR", "gst_required": True})
+                raw_input="snacks for 50", parsed_intent={"category": "fb", "location": "BLR",
+                "delivery_address": "5th floor, Acme Tower, Koramangala", "gst_required": True})
     store = InMemoryStore(goals={"g1": goal}, companies={"c1": _company()})
 
     async def fake_search(query):
@@ -41,7 +42,8 @@ async def test_process_goal_demo_mode_uses_seeded_vendors(monkeypatch):
     # DEMO_MODE: discovery returns seeded vendors (your numbers), not live Places.
     monkeypatch.setattr(orch.settings, "demo_mode", True)
     goal = Goal(id="g1", status="processing", category="fb", company_id="c1",
-                raw_input="snacks", parsed_intent={"category": "fb", "location": "Bengaluru"})
+                raw_input="snacks", parsed_intent={"category": "fb", "location": "Bengaluru",
+                "delivery_address": "3rd floor, Tech Park, Whitefield"})
     store = InMemoryStore(goals={"g1": goal}, companies={"c1": _company()})
     await store.upsert_vendor({"google_place_id": "gp1", "name": "A", "phone": "+9111",
                                "category": "fb", "city": "Bengaluru"})
@@ -59,7 +61,9 @@ async def test_process_goal_demo_mode_uses_seeded_vendors(monkeypatch):
 
 
 async def test_process_goal_no_vendors_escalates():
-    goal = Goal(id="g1", status="processing", category="fb", company_id="c1", parsed_intent={"category": "fb"})
+    goal = Goal(id="g1", status="processing", category="fb", company_id="c1",
+                parsed_intent={"category": "fb", "location": "BLR",
+                               "delivery_address": "2nd floor, MG Road"})
     store = InMemoryStore(goals={"g1": goal}, companies={"c1": _company()})
 
     async def empty_search(query):
@@ -69,6 +73,25 @@ async def test_process_goal_no_vendors_escalates():
                              places_agent=PlacesAgent(search_fn=empty_search), router=FakeRouter())
     assert res["status"] == "operator_escalated"
     assert await store.get_goal_state("g1") == "operator_escalated"
+
+
+async def test_process_goal_without_delivery_address_asks_employee():
+    # Place + delivery address are mandatory; a missing address must make the agent
+    # ASK the employee and contact NO vendors (budget stays optional).
+    goal = Goal(id="g1", status="processing", category="fb", company_id="c1",
+                parsed_intent={"category": "fb", "location": "Bengaluru"})  # no delivery_address
+    store = InMemoryStore(goals={"g1": goal}, companies={"c1": _company()})
+
+    async def must_not_search(query):
+        raise AssertionError("discovery ran before clarification")
+
+    res = await process_goal("g1", store=store, redis=FakeRedis(),
+                             places_agent=PlacesAgent(search_fn=must_not_search), router=FakeRouter())
+    assert res["status"] == "needs_clarification"
+    fields = {q["field"]: q["required"] for q in res["questions"]}
+    assert fields["delivery_address"] is True        # mandatory
+    assert fields["budget"] is False                 # optional — never blocks
+    assert await store.get_goal_state("g1") == "processing"   # not advanced, not escalated
 
 
 # ── quote collection -> rank -> approval card ───────────────────────────────
