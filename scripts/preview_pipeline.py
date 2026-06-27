@@ -34,6 +34,35 @@ TEMPLATE_BODY = (
 )
 
 
+def _parse_budget(s: str):
+    """'40k' -> 40000, '1.5 lakh' -> 150000, plain number -> float; else raw text."""
+    t = s.lower().replace("rs", "").replace("inr", "").replace("₹", "").replace(",", "").strip()
+    mult = 1
+    if t.endswith("k"):
+        mult, t = 1000, t[:-1].strip()
+    elif "lakh" in t or t.endswith("l"):
+        mult, t = 100000, t.replace("lakh", "").rstrip("l").strip()
+    try:
+        return float(t) * mult
+    except ValueError:
+        return s
+
+
+def _collect_missing(intent: dict) -> dict:
+    """Interactively prompt the employee for missing intake fields (TTY only).
+    Required fields are re-asked until answered; budget is skippable."""
+    for q in clarifying_questions(intent):
+        ans = input(f"   • {q['ask']}\n     > ").strip()
+        if q["required"]:
+            while not ans:
+                ans = input("     (required) > ").strip()
+        if not ans or ans.lower() == "skip":
+            continue
+        intent["budget_hint" if q["field"] == "budget" else q["field"]] = (
+            _parse_budget(ans) if q["field"] == "budget" else ans)
+    return intent
+
+
 async def main(goal_text: str) -> None:
     print("=" * 78)
     print(f"GOAL:  {goal_text}")
@@ -51,11 +80,16 @@ async def main(goal_text: str) -> None:
     # Intake gate — collect mandatory fields (place + delivery address) before
     # contacting any vendor. Budget is optional. The agent asks the employee.
     if needs_clarification(intent):
-        print("\n⚠️  AGENT ASKS THE EMPLOYEE FIRST (no vendors contacted yet):")
-        for q in clarifying_questions(intent):
-            print(f"     • [{'required' if q['required'] else 'optional'}] {q['ask']}")
-        print("\n   (add these details to the goal and re-run to see discovery + RFQ)")
-        return
+        if sys.stdin.isatty():                       # real terminal -> ask & wait for input
+            print("\n🟡 A few details needed before I contact any vendor:")
+            intent = _collect_missing(intent)
+            print()
+        else:                                        # non-interactive -> list and stop
+            print("\n⚠️  AGENT ASKS THE EMPLOYEE FIRST (no vendors contacted yet):")
+            for q in clarifying_questions(intent):
+                print(f"     • [{'required' if q['required'] else 'optional'}] {q['ask']}")
+            print("\n   (run this in your own Terminal to type the answers interactively)")
+            return
 
     # 2) Discovery (live Google Places) + 3) vendor-graph ranking
     store = get_store()

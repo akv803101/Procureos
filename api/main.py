@@ -12,7 +12,7 @@ import logging
 
 from fastapi import FastAPI
 
-from api.routes import approvals, goals, webhooks
+from api.routes import approvals, chat, goals, webhooks
 
 logging.basicConfig(level=logging.INFO)
 
@@ -28,6 +28,7 @@ async def health() -> dict:
 app.include_router(goals.router)
 app.include_router(approvals.router)
 app.include_router(webhooks.router)
+app.include_router(chat.router)  # conversational intake demo UI at /chat
 
 # Phase 2+ will register more routers here (goals, orders, vendors, ...) and
 # Phase 3 adds auth. The Slack webhook is HMAC-verified (Fix 11); the approval
