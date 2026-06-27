@@ -35,7 +35,7 @@ def make_handlers(by_model: dict):
 # ── routing + fallback ──────────────────────────────────────────────────────
 async def test_primary_model_success():
     r = LLMRouter(handlers=make_handlers(
-        {"llama-3.1-8b-instant": RawCompletion('{"category":"fb","confidence":0.9}')}))
+        {"llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.9}')}))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
     assert res.provider == "groq"
     assert res.fallback_used is False
@@ -45,11 +45,11 @@ async def test_primary_model_success():
 
 async def test_fallback_on_provider_down():
     r = LLMRouter(handlers=make_handlers({
-        "llama-3.1-8b-instant": ProviderDownError("down"),
-        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.95}'),
+        "llama-3.3-70b-versatile": ProviderDownError("down"),   # primary down
+        "llama-3.1-8b-instant": RawCompletion('{"category":"fb","confidence":0.95}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/llama-3.3-70b-versatile"
+    assert res.model == "groq/llama-3.1-8b-instant"
     assert res.fallback_used is True
 
 
@@ -105,11 +105,11 @@ async def test_require_json_false_skips_parse_and_gate():
 
 async def test_unparseable_json_falls_through():
     r = LLMRouter(handlers=make_handlers({
-        "llama-3.1-8b-instant": RawCompletion("not json at all"),
-        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.9}'),
+        "llama-3.3-70b-versatile": RawCompletion("not json at all"),  # primary unparseable
+        "llama-3.1-8b-instant": RawCompletion('{"category":"fb","confidence":0.9}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/llama-3.3-70b-versatile"
+    assert res.model == "groq/llama-3.1-8b-instant"
 
 
 async def test_json_task_returns_cleaned_canonical_json():
@@ -118,7 +118,7 @@ async def test_json_task_returns_cleaned_canonical_json():
     # caller's plain json.loads(result.text) works (regression: live Groq broke
     # parse_intent because result.text used to be the raw fenced model output).
     r = LLMRouter(handlers=make_handlers(
-        {"llama-3.1-8b-instant": RawCompletion('```json\n{"category":"fb","confidence":0.9}\n```')}))
+        {"llama-3.3-70b-versatile": RawCompletion('```json\n{"category":"fb","confidence":0.9}\n```')}))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
     assert json.loads(res.text) == {"category": "fb", "confidence": 0.9}  # no fence-stripping by caller
 
@@ -126,11 +126,11 @@ async def test_json_task_returns_cleaned_canonical_json():
 # ── circuit breaker (Fix 20) ────────────────────────────────────────────────
 async def test_rate_limit_falls_through_without_tripping_breaker():
     r = LLMRouter(handlers=make_handlers({
-        "llama-3.1-8b-instant": RateLimitError("429"),
-        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.9}'),
+        "llama-3.3-70b-versatile": RateLimitError("429"),   # primary rate-limited
+        "llama-3.1-8b-instant": RawCompletion('{"category":"fb","confidence":0.9}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/llama-3.3-70b-versatile"
+    assert res.model == "groq/llama-3.1-8b-instant"
     assert r._breakers["groq"].is_open() is False
 
 

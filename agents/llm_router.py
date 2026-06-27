@@ -51,8 +51,8 @@ class LLMTask(str, Enum):
 # Priority order: index 0 is primary, the rest are the fallback chain.
 TASK_MODEL_ROUTING: dict[LLMTask, list[str]] = {
     LLMTask.INTENT_PARSING: [
-        "groq/llama-3.1-8b-instant",
-        "groq/llama-3.3-70b-versatile",  # was mixtral-8x7b-32768 (decommissioned by Groq)
+        "groq/llama-3.3-70b-versatile",  # primary — 8b returned unparseable JSON + missed dates
+        "groq/llama-3.1-8b-instant",     # cheap fallback
         "gemini/gemini-1.5-flash",
         "anthropic/claude-haiku-4-5",   # PRD said claude-haiku-4 (stale) — corrected
     ],
@@ -295,7 +295,7 @@ class LLMRouter:
         client = self._client("anthropic", lambda: anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key))
         try:
             resp = await client.messages.create(
-                model=model, max_tokens=1000,
+                model=model, max_tokens=1000, temperature=0,  # deterministic extraction
                 messages=[{"role": "user", "content": prompt}],
             )
         except anthropic.RateLimitError as e:
@@ -313,7 +313,8 @@ class LLMRouter:
     async def _call_openai(self, model: str, prompt: str, require_json: bool) -> RawCompletion:
         import openai
         client = self._client("openai", lambda: openai.AsyncOpenAI(api_key=settings.openai_api_key))
-        kwargs = dict(model=model, max_tokens=1000, messages=[{"role": "user", "content": prompt}])
+        kwargs = dict(model=model, max_tokens=1000, temperature=0,  # deterministic extraction
+                      messages=[{"role": "user", "content": prompt}])
         if require_json:
             kwargs["response_format"] = {"type": "json_object"}  # OpenAI-native JSON mode
         try:
@@ -331,7 +332,8 @@ class LLMRouter:
         genai.configure(api_key=settings.google_api_key)  # idempotent
         model_obj = genai.GenerativeModel(model)
         try:
-            resp = await asyncio.to_thread(model_obj.generate_content, prompt)
+            resp = await asyncio.to_thread(
+                lambda: model_obj.generate_content(prompt, generation_config={"temperature": 0}))
         except Exception as e:
             raise ProviderDownError(str(e)) from e
         # PRD hardcoded 0 tokens for Gemini; read usage_metadata when present so
@@ -347,7 +349,8 @@ class LLMRouter:
 
         def _call():
             return client.chat.completions.create(
-                model=model, max_tokens=1000, messages=[{"role": "user", "content": prompt}]
+                model=model, max_tokens=1000, temperature=0,  # deterministic extraction
+                messages=[{"role": "user", "content": prompt}],
             )
         try:
             resp = await asyncio.to_thread(_call)  # groq sync client off the event loop

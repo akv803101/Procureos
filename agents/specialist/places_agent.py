@@ -26,6 +26,21 @@ CATEGORY_SEARCH_TERMS = {
 }
 
 
+def _credibility(c: dict) -> float:
+    """Review-count-weighted rating so a 5.0 from 4 reviews doesn't beat a 4.9
+    from 600. Bayesian shrinkage toward a conservative prior (m reviews @ C stars).
+    Falls back to the raw rating when review_count is unknown (keeps unit tests
+    that omit review_count meaningful)."""
+    r = c.get("google_rating")
+    if r is None:
+        return 0.0
+    v = c.get("review_count")
+    if not v:                      # unknown/zero count -> trust the raw rating
+        return float(r)
+    m, C = 20, 4.0                 # prior worth 20 reviews at a 4.0-star baseline
+    return (v * r + m * C) / (v + m)
+
+
 class PlacesAgent:
     def __init__(self, *, search_fn=None, known_vendors_fn=None):
         # search_fn(query) -> list[normalized vendor dicts]; defaults to live Places.
@@ -64,11 +79,11 @@ class PlacesAgent:
             c["score_band"] = k.get("band") if k else "unproven"
             c["vendor_id"] = k.get("id") if k else None
 
-        # Rank: scored/known vendors first (highest score), then unproven by
-        # Google rating. (Matches the core-flow rule: rated vendors first.)
+        # Rank: scored/known vendors first (highest score), then unproven by a
+        # review-count-weighted rating. (Matches the core-flow rule: rated first.)
         def sort_key(c: dict):
             score = c.get("composite_score")
-            return (0 if score is not None else 1, -(score or 0), -(c.get("google_rating") or 0))
+            return (0 if score is not None else 1, -(score or 0), -_credibility(c))
 
         deduped.sort(key=sort_key)
         log.debug("PlacesAgent: %d candidates -> top %d for %s/%s", len(deduped), limit, category, location)

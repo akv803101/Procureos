@@ -73,15 +73,44 @@ RFQ_TEMPLATE_NAME = "rfq_first_contact_v1"
 RFQ_TEMPLATE_LANG = "en"
 
 
+# Human-readable labels so an RFQ never leaks the internal category code ("fb").
+CATEGORY_LABEL = {
+    "fb": "snacks / catering", "water": "drinking water",
+    "stationery": "office stationery", "it_hardware": "IT hardware",
+    "hotel": "hotel rooms", "flights": "flights", "generic": "supplies",
+}
+_PEOPLE_BASED = {"fb", "hotel", "flights"}  # quantity = number of people, not units
+
+
+def _human_requirement(intent: dict) -> str:
+    """Natural requirement phrase for the vendor — 'snacks for 100 people' or
+    '30 office chairs' — preferring the specific item (subcategory), never 'fb'."""
+    cat = intent.get("category") or "generic"
+    item = intent.get("subcategory") or CATEGORY_LABEL.get(cat, "supplies")
+    qty = intent.get("quantity")
+    if not qty:
+        return item
+    return f"{item} for {qty} people" if cat in _PEOPLE_BASED else f"{qty} {item}"
+
+
+def _human_needed_by(intent: dict) -> str:
+    """A firm date ('5 Jul 2026') when the goal names one, else friendly urgency."""
+    raw = intent.get("needed_by")
+    if raw:
+        try:
+            dt = datetime.strptime(raw, "%Y-%m-%d")
+            return f"{dt.day} {dt:%b %Y}"
+        except (ValueError, TypeError):
+            return str(raw)
+    return {"asap": "as soon as possible", "this_week": "this week",
+            "flexible": "a flexible date"}.get(intent.get("urgency"), "this week")
+
+
 def _rfq_template_params(vendor_name: str, intent: dict, code: str) -> list[str]:
     """Fill rfq_first_contact_v1 body vars {{1}}..{{5}} in order:
     vendor name, requirement, location, needed-by, quote ref."""
-    category = intent.get("category_display") or intent.get("category") or "supplies"
-    qty = intent.get("quantity")
-    requirement = f"{qty} {category}".strip() if qty else str(category)
     location = intent.get("location") or intent.get("destination") or "Bengaluru"
-    needed_by = intent.get("needed_by") or intent.get("urgency") or "this week"
-    return [vendor_name, requirement, location, str(needed_by), code]
+    return [vendor_name, _human_requirement(intent), location, _human_needed_by(intent), code]
 
 
 async def generate_rfq(vendor_name: str, intent: dict, ref_code: str, budget,
@@ -89,12 +118,13 @@ async def generate_rfq(vendor_name: str, intent: dict, ref_code: str, budget,
     """Generate a WhatsApp RFQ message (plain text, so require_json=False)."""
     prompt = RFQ_GENERATOR_PROMPT.format(
         vendor_name=vendor_name,
-        category_display=intent.get("category", "generic"),
+        category_display=intent.get("subcategory")
+        or CATEGORY_LABEL.get(intent.get("category") or "generic", "supplies"),
         quantity_display=intent.get("quantity", "unspecified"),
         location=intent.get("location") or intent.get("destination") or "",
         budget_display=budget,
         gst_required=intent.get("gst_required", True),
-        urgency_display=intent.get("urgency", "this_week"),
+        urgency_display=_human_needed_by(intent),
         ref_code=ref_code,
         is_first_contact=is_first_contact,
     )

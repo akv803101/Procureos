@@ -106,7 +106,7 @@ async def test_dispatch_first_contact_sends_approved_template_with_5_vars():
     assert all(d["channel"] == "template" for d in res["dispatched"])
     to0, tpl0, params0 = sent[0]
     assert tpl0 == "rfq_first_contact_v1"
-    assert params0[0] == "Anand Caterers"        # {{1}} vendor name
-    assert params0[1] == "50 fb"                  # {{2}} requirement (qty + category)
-    assert params0[2] == "Bengaluru"             # {{3}} location
-    assert params0[4] == code                     # {{5}} quote ref code
+    assert params0[0] == "Anand Caterers"                 # {{1}} vendor name
+    assert params0[1] == "snacks / catering for 50 people"  # {{2}} natural requirement, no "fb" leak
+    assert params0[2] == "Bengaluru"                      # {{3}} location
+    assert params0[4] == code                             # {{5}} quote ref code
