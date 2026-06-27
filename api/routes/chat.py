@@ -13,7 +13,9 @@ Session history is in-memory (demo only) keyed by a client-generated session id.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import date
 
 from fastapi import APIRouter, Request
@@ -81,9 +83,13 @@ live counter); delivery time on the day; any setup / crockery / staff.
 - flights: route, dates, passengers, cabin class.
 
 GROUNDED VETTING: after find_vendors you receive each vendor's phone, address, website, \
-rating + review count, business status, AND a Google AI "review summary" (a digest of what \
-reviewers say about quality, service, timeliness). USE this data — you DO have their \
-contact details, so never say you can't show them. When asked about quality, delivery, \
+rating + review count, business status, a Google AI "review summary" (a digest of what \
+reviewers say about quality, service, timeliness), AND a structured service-risk assessment \
+(level low/medium/high/unknown + delivery/service/quality signals) derived ONLY from that \
+summary. Vendors are already ordered best-vetted-first (high-risk last). USE this data — you \
+DO have their contact details, so never say you can't show them. Lead with the low-risk \
+vendors, explicitly flag any high-risk one and why, and treat 'unknown' as "no review data \
+yet" (unproven, NOT bad). Never rate a vendor better or worse than its summary supports. When asked about quality, delivery, \
 after-sales or complaints, READ the review summary and give a grounded, comparative answer: \
 cite what each summary says, call out any weak/negative service or delivery signals, and \
 rank who looks strongest for THIS order. Frame it as "based on Google's review summary" — \
@@ -168,7 +174,54 @@ def _vendor_block(i: int, v: dict) -> str:
     summary = v.get("review_summary")
     lines.append(f"   review summary (Google AI digest of reviews): {summary}" if summary
                  else "   review summary: none returned")
+    r = v.get("risk") or {}
+    lines.append(f"   service-risk: {r.get('level', 'unknown')} "
+                 f"(delivery:{r.get('delivery')}, service:{r.get('service')}, quality:{r.get('quality')})"
+                 + (f" — {r['note']}" if r.get('note') else ""))
     return "\n".join(lines)
+
+
+_RISK_RANK = {"low": 0, "medium": 1, "unknown": 2, "high": 3}
+_DEFAULT_RISK = {"level": "unknown", "delivery": "not_mentioned",
+                 "service": "not_mentioned", "quality": "not_mentioned", "note": ""}
+
+
+async def _assess_risk(vendors: list[dict]) -> None:
+    """Classify each vendor's SERVICE RISK from its Google review summary ONLY
+    (grounded, no outside knowledge, no fabrication). One batched LLM call; mutates
+    each vendor in place adding 'risk'. Fail-safe: on any error all stay 'unknown'."""
+    for v in vendors:
+        v["risk"] = dict(_DEFAULT_RISK)
+    if not vendors:
+        return
+    rated = [{"i": i, "name": _clean_name(v.get("name")), "summary": v.get("review_summary") or ""}
+             for i, v in enumerate(vendors)]
+    prompt = (
+        "You vet B2B suppliers for a bulk corporate order. For EACH vendor, judge service "
+        "risk using ONLY the Google review summary text given — do NOT use outside knowledge "
+        "and do NOT invent anything. If a summary is empty, its level is 'unknown'. Use 'high' "
+        "ONLY when the summary itself signals negative delivery/service/quality; 'low' when it "
+        "clearly praises service/delivery/reliability; 'medium' for mixed/thin positive.\n\n"
+        + json.dumps(rated) +
+        '\n\nReturn ONLY a JSON array (same order, one object per vendor):\n'
+        '[{"i":0,"level":"low|medium|high|unknown","delivery":"positive|negative|not_mentioned",'
+        '"service":"positive|negative|not_mentioned","quality":"positive|negative|not_mentioned",'
+        '"note":"<=8-word grounded phrase quoting the summary\'s signal"}]'
+    )
+    try:
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        resp = await client.messages.create(model="claude-haiku-4-5", max_tokens=800,
+                                             temperature=0, messages=[{"role": "user", "content": prompt}])
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        text = re.sub(r"^```(?:json)?\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+        for obj in json.loads(text):
+            i = obj.get("i")
+            if isinstance(i, int) and 0 <= i < len(vendors):
+                vendors[i]["risk"] = {k: obj.get(k, _DEFAULT_RISK[k]) for k in _DEFAULT_RISK}
+    except Exception:  # noqa: BLE001 — vetting must never break discovery
+        log.exception("service-risk assessment failed; defaulting to 'unknown'")
 
 
 async def _find_vendors(args: dict) -> tuple[str, dict]:
@@ -176,9 +229,13 @@ async def _find_vendors(args: dict) -> tuple[str, dict]:
     intent = _intent_from_args(args)
     agent = PlacesAgent(known_vendors_fn=get_store().get_known_vendors)
     vendors = await agent.search(intent, limit=TOP_N)
+    # Deepen vetting: score service risk from review summaries, then down-rank weak
+    # vendors (high risk last). Stable sort preserves credibility order within a tier.
+    await _assess_risk(vendors)
+    vendors.sort(key=lambda v: _RISK_RANK.get((v.get("risk") or {}).get("level", "unknown"), 2))
     cards = [{"name": _clean_name(v.get("name")), "phone": v.get("phone"), "rating": v.get("google_rating"),
               "reviews": v.get("review_count"), "address": v.get("address"), "website": v.get("website"),
-              "summary": v.get("review_summary")}
+              "summary": v.get("review_summary"), "risk": v.get("risk")}
              for v in vendors]
     rfq = None
     reachable = [v for v in vendors if v.get("phone")]
@@ -294,8 +351,11 @@ _CHAT_HTML = """<!doctype html>
   function esc(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
   function bubble(who, html){ const r=document.createElement('div'); r.className='row '+who;
     r.innerHTML='<div class="bubble">'+html+'</div>'; log.appendChild(r); log.scrollTop=log.scrollHeight; return r; }
+  function riskBadge(r){ if(!r||!r.level) return '';
+    var c={low:'#2ea043',medium:'#d29922',high:'#f85149',unknown:'#6e7681'}[r.level]||'#6e7681';
+    return ' <span style="background:'+c+';color:#fff;font-size:11px;padding:1px 7px;border-radius:6px">risk: '+esc(r.level)+'</span>'; }
   function vendorsHtml(vs){ if(!vs||!vs.length) return '';
-    return '<div class="vendors">'+vs.map((v,i)=>'<div class="v"><b>'+(i+1)+'. '+esc(v.name)+'</b>'
+    return '<div class="vendors">'+vs.map((v,i)=>'<div class="v"><b>'+(i+1)+'. '+esc(v.name)+'</b>'+riskBadge(v.risk)
       +' <span class="meta">— '+(v.phone?esc(v.phone):'no phone')+' · ⭐'+(v.rating??'?')+' ('+(v.reviews??0)+')</span>'
       +(v.address?'<div class="meta">'+esc(v.address)+'</div>':'')
       +(v.website?'<div class="meta"><a href="'+esc(v.website)+'" target="_blank" rel="noopener">'+esc(v.website)+'</a></div>':'')
