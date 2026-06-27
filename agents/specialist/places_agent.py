@@ -52,7 +52,10 @@ class PlacesAgent:
     async def search(self, intent: dict, *, limit: int = 3) -> list[dict]:
         category = intent.get("category") or "generic"
         location = intent.get("location") or intent.get("destination") or ""
-        term = CATEGORY_SEARCH_TERMS.get(category, CATEGORY_SEARCH_TERMS["generic"])
+        # A focused search phrase from the agent (e.g. "non-veg North Indian
+        # corporate caterers") narrows discovery to better-matched vendors; fall
+        # back to the generic category term when none is supplied.
+        term = intent.get("search_terms") or CATEGORY_SEARCH_TERMS.get(category, CATEGORY_SEARCH_TERMS["generic"])
         query = f"{term} in {location}".strip()
 
         if self._search_fn is not None:

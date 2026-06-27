@@ -43,20 +43,32 @@ hotels, flights). Today is {today}. GST invoices are required by default for B2B
 
 Behave like a sharp, friendly colleague — NOT a form. Keep replies short and natural.
 
-Before you can find vendors you MUST know: the category, the quantity, the delivery \
-city/area, AND the exact delivery address (building / floor / area + landmark). Budget \
-is OPTIONAL. A date is needed only for dated events. Ask for missing MANDATORY info \
-conversationally, one or two things at a time — never dump a checklist.
+MANDATORY before searching: category, quantity, delivery city/area, AND the exact \
+delivery address (building / floor / area + landmark). Budget is OPTIONAL. A date is \
+needed only for dated events.
+
+ALSO gather the few attributes that materially change WHICH vendor fits and the price — \
+this is how you vet well and avoid a generic list. Ask them conversationally (2-3 at a \
+time, never a form), skip anything already said, and use judgement on what's relevant:
+- catering (fb): veg / non-veg / Jain; snack type & cuisine (tea-time snacks, chaat, \
+finger food, South/North Indian, continental); serving style (packed boxes / buffet / \
+live counter); delivery time on the day; any setup / crockery / staff.
+- water: pack type (500ml/1L bottles or 20L cans), branded vs local, quantity.
+- stationery: exact items + quantities, brand preference.
+- it_hardware: exact spec / model / config, brand, warranty, quantity.
+- hotel: city, check-in/out dates, rooms, star rating, key amenities.
+- flights: route, dates, passengers, cabin class.
 
 Answer the employee's questions. If something can only be confirmed by the vendor \
-(e.g. "do they serve non-veg?", "can they do it by Friday?"), say you'll include it \
-in the request, or offer to add it as a requirement — do NOT restart the conversation.
+(e.g. "do they serve non-veg?"), note it as a requirement — do NOT restart.
 
-When you have the mandatory info, call the find_vendors tool, then present the results \
-warmly and concisely (the UI shows the vendor cards + drafted message, so don't repeat \
-the full list verbatim — just summarise and tell them what happens next: they pick or \
-you can send the RFQ). If the employee changes something (quantity, date, veg/non-veg, \
-address), update it and call find_vendors again."""
+When you have the mandatory fields AND the key attributes, craft a FOCUSED Google search \
+phrase in `search_terms` reflecting them (e.g. "non-veg North Indian corporate caterers") \
+so discovery returns well-matched vendors, and put the full spec in `special_requirements` \
+so the RFQ is precise. Then call find_vendors. Present results warmly and concisely (the \
+UI shows the cards + drafted message — don't repeat the list verbatim; summarise and say \
+what's next: pick one or send to all). If the employee changes anything (quantity, date, \
+veg/non-veg, cuisine, address), update and call find_vendors again."""
 
 FIND_VENDORS_TOOL = {
     "name": "find_vendors",
@@ -74,7 +86,11 @@ FIND_VENDORS_TOOL = {
             "delivery_address": {"type": "string", "description": "building / floor / area + landmark"},
             "needed_by": {"type": "string", "description": "YYYY-MM-DD if a date was given, else omit"},
             "budget": {"type": "string", "description": "free text e.g. '₹100/person' or '40k', if given"},
-            "special_requirements": {"type": "string"},
+            "search_terms": {"type": "string", "description": ("focused Google search phrase "
+                             "reflecting the gathered attributes, e.g. 'non-veg North Indian "
+                             "corporate caterers' — drives vendor discovery")},
+            "special_requirements": {"type": "string", "description": ("full spec for the RFQ: "
+                                     "cuisine, veg/non-veg, serving style, timing, setup, etc.")},
         },
         "required": ["category", "city", "delivery_address"],
     },
@@ -92,9 +108,17 @@ def _intent_from_args(a: dict) -> dict:
         "delivery_address": a.get("delivery_address"),
         "needed_by": a.get("needed_by"),
         "budget_hint": a.get("budget"),
+        "search_terms": a.get("search_terms"),       # focused Places query from the agent
         "special_requirements": a.get("special_requirements"),
         "gst_required": True,
     }
+
+
+def _clean_name(name: str) -> str:
+    """Google business names are often keyword-stuffed ('X | best Y in Z | ...').
+    Keep the first real segment so RFQs and cards read like a real business name."""
+    n = (name or "").split("|")[0].split(" - ")[0].strip()
+    return (n[:48] if n else (name or "")).strip()
 
 
 async def _find_vendors(args: dict) -> tuple[str, dict]:
@@ -102,12 +126,12 @@ async def _find_vendors(args: dict) -> tuple[str, dict]:
     intent = _intent_from_args(args)
     agent = PlacesAgent(known_vendors_fn=get_store().get_known_vendors)
     vendors = await agent.search(intent, limit=TOP_N)
-    cards = [{"name": v.get("name"), "phone": v.get("phone"), "rating": v.get("google_rating"),
+    cards = [{"name": _clean_name(v.get("name")), "phone": v.get("phone"), "rating": v.get("google_rating"),
               "reviews": v.get("review_count"), "address": v.get("address")} for v in vendors]
     rfq = None
     reachable = [v for v in vendors if v.get("phone")]
     if reachable:
-        params = _rfq_template_params(reachable[0]["name"], intent, ref_code_for_goal("chat-demo"))
+        params = _rfq_template_params(_clean_name(reachable[0]["name"]), intent, ref_code_for_goal("chat-demo"))
         rfq = TEMPLATE_BODY.format(*params)
     summary = (f"Found {len(cards)} verified vendors: "
                + "; ".join(f"{c['name']} (⭐{c['rating']}, {c['reviews']} reviews)" for c in cards)
