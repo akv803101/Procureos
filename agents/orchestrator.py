@@ -66,6 +66,24 @@ def ref_code_for_goal(goal_id: str) -> str:
     return ref_code(goal_id)
 
 
+# Approved WhatsApp template for the FIRST cold contact (vendor's 24h session
+# window is closed, so free-form text is disallowed). Must be created + approved
+# in Meta/Chat Mitra; the name must match exactly.
+RFQ_TEMPLATE_NAME = "rfq_first_contact_v1"
+RFQ_TEMPLATE_LANG = "en"
+
+
+def _rfq_template_params(vendor_name: str, intent: dict, code: str) -> list[str]:
+    """Fill rfq_first_contact_v1 body vars {{1}}..{{5}} in order:
+    vendor name, requirement, location, needed-by, quote ref."""
+    category = intent.get("category_display") or intent.get("category") or "supplies"
+    qty = intent.get("quantity")
+    requirement = f"{qty} {category}".strip() if qty else str(category)
+    location = intent.get("location") or intent.get("destination") or "Bengaluru"
+    needed_by = intent.get("needed_by") or intent.get("urgency") or "this week"
+    return [vendor_name, requirement, location, str(needed_by), code]
+
+
 async def generate_rfq(vendor_name: str, intent: dict, ref_code: str, budget,
                        *, is_first_contact: bool = True, router=llm_router) -> str:
     """Generate a WhatsApp RFQ message (plain text, so require_json=False)."""
@@ -92,20 +110,33 @@ async def dispatch_rfqs(goal_id: str, intent: dict, vendors: list[dict], budget,
 
     Returns {"ref", "dispatched": [...], "skipped_no_phone": [...]}.
     """
-    ref = "REF:" + ref_code_for_goal(goal_id)
+    code = ref_code_for_goal(goal_id)
+    ref = "REF:" + code
     with_phone = [v for v in vendors if v.get("phone")]
     skipped = [v.get("vendor_id") or v.get("google_place_id") or v.get("name")
                for v in vendors if not v.get("phone")]
 
     async def _one(v: dict) -> dict:
         vid = v.get("vendor_id") or v.get("google_place_id") or v.get("name")
-        msg = await generate_rfq(v["name"], intent, ref, budget,
-                                 is_first_contact=is_first_contact, router=router)
-        if ref not in msg:  # ensure the REF is present even if the model omitted it
-            msg = f"{msg}\n\n{ref}"
-        await whatsapp.send_text(v["phone"], msg, send_fn=send_fn)
-        log.debug("[%s] RFQ sent to %s (%s)", goal_id, v.get("name"), ref)
-        return {"vendor_id": vid, "phone": v["phone"], "ref": ref, "sent": True}
+        if is_first_contact:
+            # Cold contact: WhatsApp permits only an APPROVED TEMPLATE outside the
+            # vendor's 24h window. An injected send_fn here must be template-shaped
+            # (to, template_name, language, body_params).
+            params = _rfq_template_params(v["name"], intent, code)
+            await whatsapp.send_template(v["phone"], RFQ_TEMPLATE_NAME,
+                                         language=RFQ_TEMPLATE_LANG,
+                                         body_params=params, send_fn=send_fn)
+            channel = "template"
+        else:
+            # Window already open (vendor replied): free-form negotiation text.
+            msg = await generate_rfq(v["name"], intent, ref, budget,
+                                     is_first_contact=False, router=router)
+            if ref not in msg:  # ensure the REF is present even if the model omitted it
+                msg = f"{msg}\n\n{ref}"
+            await whatsapp.send_text(v["phone"], msg, send_fn=send_fn)
+            channel = "text"
+        log.debug("[%s] RFQ sent to %s via %s (%s)", goal_id, v.get("name"), channel, ref)
+        return {"vendor_id": vid, "phone": v["phone"], "ref": ref, "channel": channel, "sent": True}
 
     dispatched = await asyncio.gather(*[_one(v) for v in with_phone]) if with_phone else []
     return {"ref": ref, "dispatched": list(dispatched), "skipped_no_phone": skipped}

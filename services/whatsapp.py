@@ -100,6 +100,52 @@ async def _default_send_buttons(to: str, body: str, buttons: list[dict]) -> dict
         return resp.json()
 
 
+async def send_template(to: str, template_name: str, *, language: str = "en",
+                        body_params: list[str], send_fn=None) -> dict:
+    """Send an APPROVED WhatsApp template — required for the FIRST contact with a
+    vendor whose 24h session window is closed (WhatsApp disallows free-form
+    business-initiated text). `body_params` fill the template's {{1}}..{{n}} body
+    variables in order. Once the vendor replies (window opens), switch to
+    send_text for free-form negotiation.
+    """
+    send_fn = send_fn or _default_send_template
+    log.debug("whatsapp send_template to=%s tpl=%s vars=%d", to, template_name, len(body_params))
+    return await send_fn(to, template_name, language, body_params)
+
+
+async def _default_send_template(to: str, template_name: str, language: str,
+                                 body_params: list[str]) -> dict:
+    import httpx
+
+    if not settings.chat_mitra_api_key:
+        raise RuntimeError("CHAT_MITRA_API_KEY not set — cannot send WhatsApp")
+    # WhatsApp Cloud API template shape (Chat Mitra proxies Meta). Static quick-reply
+    # buttons are fixed at template-creation time, so only body params are sent here.
+    # NOTE: confirm Chat Mitra's exact template-send payload before go-live — only
+    # this default sender changes, not the call sites (same caveat as _default_send).
+    payload = {
+        "from": settings.chat_mitra_waba_number,
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language},
+            "components": [
+                {"type": "body",
+                 "parameters": [{"type": "text", "text": p} for p in body_params]},
+            ],
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.chat_mitra_api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(f"{settings.chat_mitra_base_url}/messages", headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
 def normalize_inbound(payload: dict) -> dict:
     """Normalize a provider WhatsApp webhook to the flat shape waba_router (Fix 06)
     expects: {from, text, type, interactive}.

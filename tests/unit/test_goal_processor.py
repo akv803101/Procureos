@@ -25,7 +25,7 @@ async def test_process_goal_discovers_and_dispatches():
 
     sent = []
 
-    async def wsend(to, body):
+    async def wsend(to, template_name, language, body_params):   # cold first-contact => template send
         sent.append(to); return {"ok": True}
 
     res = await process_goal("g1", store=store, redis=FakeRedis(),
@@ -49,7 +49,7 @@ async def test_process_goal_demo_mode_uses_seeded_vendors(monkeypatch):
                                "category": "fb", "city": "Bengaluru"})
     sent = []
 
-    async def wsend(to, body):
+    async def wsend(to, template_name, language, body_params):   # cold first-contact => template send
         sent.append(to); return {"ok": True}
 
     res = await process_goal("g1", store=store, redis=FakeRedis(),
