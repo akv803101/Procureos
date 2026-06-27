@@ -46,17 +46,17 @@ async def test_primary_model_success():
 async def test_fallback_on_provider_down():
     r = LLMRouter(handlers=make_handlers({
         "llama-3.1-8b-instant": ProviderDownError("down"),
-        "mixtral-8x7b-32768": RawCompletion('{"category":"fb","confidence":0.95}'),
+        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.95}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/mixtral-8x7b-32768"
+    assert res.model == "groq/llama-3.3-70b-versatile"
     assert res.fallback_used is True
 
 
 async def test_all_models_failed_raises():
     r = LLMRouter(handlers=make_handlers({
         "llama-3.1-8b-instant": ProviderDownError("d"),
-        "mixtral-8x7b-32768": ProviderDownError("d"),
+        "llama-3.3-70b-versatile": ProviderDownError("d"),
         "gemini-1.5-flash": ProviderDownError("d"),
         "claude-haiku-4-5": ProviderDownError("d"),
     }))
@@ -80,7 +80,7 @@ async def test_quote_ambiguous_when_all_below_gate():
         "claude-sonnet-4-6": RawCompletion('{"confidence":0.5}'),
         "gpt-4o": RawCompletion('{"confidence":0.6}'),
         "gemini-1.5-pro": RawCompletion('{"confidence":0.4}'),
-        "llama-3.1-70b-versatile": RawCompletion('{"confidence":0.5}'),
+        "llama-3.3-70b-versatile": RawCompletion('{"confidence":0.5}'),
     }))
     with pytest.raises(QuoteAmbiguousError):
         await r.complete(LLMTask.QUOTE_PARSING, "x", min_confidence=0.85)
@@ -89,7 +89,7 @@ async def test_quote_ambiguous_when_all_below_gate():
 async def test_missing_confidence_field_defaults_to_pass():
     # Option ranking output has no confidence field -> defaults to 1.0 -> passes.
     r = LLMRouter(handlers=make_handlers(
-        {"llama-3.1-70b-versatile": RawCompletion('{"ranked_options":[]}')}))
+        {"llama-3.3-70b-versatile": RawCompletion('{"ranked_options":[]}')}))
     res = await r.complete(LLMTask.OPTION_RANKING, "x", min_confidence=0.0)
     assert res.confidence == 1.0
 
@@ -106,20 +106,31 @@ async def test_require_json_false_skips_parse_and_gate():
 async def test_unparseable_json_falls_through():
     r = LLMRouter(handlers=make_handlers({
         "llama-3.1-8b-instant": RawCompletion("not json at all"),
-        "mixtral-8x7b-32768": RawCompletion('{"category":"fb","confidence":0.9}'),
+        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.9}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/mixtral-8x7b-32768"
+    assert res.model == "groq/llama-3.3-70b-versatile"
+
+
+async def test_json_task_returns_cleaned_canonical_json():
+    # Real models often wrap JSON in ```fences``` despite the prompt. The router
+    # parses internally to gate confidence, but must ALSO hand back clean JSON so a
+    # caller's plain json.loads(result.text) works (regression: live Groq broke
+    # parse_intent because result.text used to be the raw fenced model output).
+    r = LLMRouter(handlers=make_handlers(
+        {"llama-3.1-8b-instant": RawCompletion('```json\n{"category":"fb","confidence":0.9}\n```')}))
+    res = await r.complete(LLMTask.INTENT_PARSING, "x")
+    assert json.loads(res.text) == {"category": "fb", "confidence": 0.9}  # no fence-stripping by caller
 
 
 # ── circuit breaker (Fix 20) ────────────────────────────────────────────────
 async def test_rate_limit_falls_through_without_tripping_breaker():
     r = LLMRouter(handlers=make_handlers({
         "llama-3.1-8b-instant": RateLimitError("429"),
-        "mixtral-8x7b-32768": RawCompletion('{"category":"fb","confidence":0.9}'),
+        "llama-3.3-70b-versatile": RawCompletion('{"category":"fb","confidence":0.9}'),
     }))
     res = await r.complete(LLMTask.INTENT_PARSING, "x")
-    assert res.model == "groq/mixtral-8x7b-32768"
+    assert res.model == "groq/llama-3.3-70b-versatile"
     assert r._breakers["groq"].is_open() is False
 
 

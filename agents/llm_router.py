@@ -52,7 +52,7 @@ class LLMTask(str, Enum):
 TASK_MODEL_ROUTING: dict[LLMTask, list[str]] = {
     LLMTask.INTENT_PARSING: [
         "groq/llama-3.1-8b-instant",
-        "groq/mixtral-8x7b-32768",
+        "groq/llama-3.3-70b-versatile",  # was mixtral-8x7b-32768 (decommissioned by Groq)
         "gemini/gemini-1.5-flash",
         "anthropic/claude-haiku-4-5",   # PRD said claude-haiku-4 (stale) — corrected
     ],
@@ -60,10 +60,10 @@ TASK_MODEL_ROUTING: dict[LLMTask, list[str]] = {
         "anthropic/claude-sonnet-4-6",  # primary — handles Hindi/Hinglish best
         "openai/gpt-4o",
         "gemini/gemini-1.5-pro",
-        "groq/llama-3.1-70b-versatile", # last resort — watch the confidence gate
+        "groq/llama-3.3-70b-versatile", # last resort — was 3.1-70b (decommissioned by Groq)
     ],
     LLMTask.OPTION_RANKING: [
-        "groq/llama-3.1-70b-versatile",
+        "groq/llama-3.3-70b-versatile",  # was 3.1-70b (decommissioned by Groq)
         "gemini/gemini-1.5-flash",
         "anthropic/claude-haiku-4-5",   # corrected from claude-haiku-4
         "openai/gpt-4o-mini",
@@ -79,7 +79,7 @@ TASK_MODEL_ROUTING: dict[LLMTask, list[str]] = {
         "anthropic/claude-haiku-4-5",   # corrected from claude-haiku-4
     ],
     LLMTask.GOAL_REFINEMENT: [
-        "groq/llama-3.1-70b-versatile",
+        "groq/llama-3.3-70b-versatile",  # was 3.1-70b (decommissioned by Groq)
         "openai/gpt-4o-mini",
         "anthropic/claude-haiku-4-5",   # corrected from claude-haiku-4
     ],
@@ -252,7 +252,12 @@ class LLMRouter:
                 continue
 
             return LLMResult(
-                text=raw.text, input_tokens=raw.input_tokens, output_tokens=raw.output_tokens,
+                # For JSON tasks return the CLEANED, canonical JSON (fences/prose
+                # already stripped by safe_parse_json above) so every caller's
+                # json.loads works — real models often wrap JSON in ```fences```
+                # despite the prompt, which a naive json.loads(result.text) chokes on.
+                text=json.dumps(parsed) if require_json else raw.text,
+                input_tokens=raw.input_tokens, output_tokens=raw.output_tokens,
                 confidence=confidence, model=model_string, provider=provider, fallback_used=fallback_used,
             )
 
