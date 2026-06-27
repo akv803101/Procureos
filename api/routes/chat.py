@@ -1,115 +1,167 @@
-"""Conversational intake (demo) — chat with the agent in the browser.
+"""Conversational procurement agent (demo) — chat with the agent in the browser.
 
 GET  /chat          -> a minimal chat UI.
-POST /chat/message  -> {session, message} -> {reply, done, vendors?, rfq?}
+POST /chat/message  -> {session, message} -> {reply, vendors?, rfq?}
 
-The agent parses the goal, asks for any MANDATORY missing field (place + delivery
-address; budget optional), then runs live discovery + drafts the RFQ. Read-only:
-it does NOT send WhatsApp, write to the DB, or move money.
+This is a REAL LLM-driven agent (Claude + tool use), not a scripted funnel: it
+holds the conversation, answers follow-up questions, asks for missing mandatory
+fields naturally (delivery city + exact address; budget optional), and decides on
+its own when it has enough to call the `find_vendors` tool. Read-only — it never
+sends WhatsApp, writes to the DB, or moves money.
 
-Session state is in-memory (demo only) keyed by a client-generated session id.
+Session history is in-memory (demo only) keyed by a client-generated session id.
 """
 from __future__ import annotations
+
+import logging
+from datetime import date
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from agents.orchestrator import (
-    _human_needed_by,
-    _human_requirement,
-    _rfq_template_params,
-    clarifying_questions,
-    parse_intent,
-    ref_code_for_goal,
-)
+from agents.orchestrator import _rfq_template_params, ref_code_for_goal
 from agents.specialist.places_agent import PlacesAgent
+from core.config import settings
 from core.store import get_store
 
 router = APIRouter(tags=["chat"])
+log = logging.getLogger(__name__)
 
 COMPANY_CITY = "Bengaluru"
 TOP_N = 5
+CHAT_MODEL = "claude-sonnet-4-6"
 TEMPLATE_BODY = (
     "Hi {0}, this is IntelliBridge Procurement. We're sourcing {1} for delivery "
     "in {2}, needed by {3}. If you can supply, please reply here with your best "
     "price (incl. GST) and availability. Quote ref: {4}. Thanks!"
 )
 
-_SESSIONS: dict[str, dict] = {}
+SYSTEM = """You are ProcureOS, a procurement assistant for IntelliBridge, an Indian \
+company based in Bengaluru. Employees chat with you in plain language to buy things \
+(snacks/catering = "fb", drinking water = "water", office stationery, IT hardware, \
+hotels, flights). Today is {today}. GST invoices are required by default for B2B.
+
+Behave like a sharp, friendly colleague — NOT a form. Keep replies short and natural.
+
+Before you can find vendors you MUST know: the category, the quantity, the delivery \
+city/area, AND the exact delivery address (building / floor / area + landmark). Budget \
+is OPTIONAL. A date is needed only for dated events. Ask for missing MANDATORY info \
+conversationally, one or two things at a time — never dump a checklist.
+
+Answer the employee's questions. If something can only be confirmed by the vendor \
+(e.g. "do they serve non-veg?", "can they do it by Friday?"), say you'll include it \
+in the request, or offer to add it as a requirement — do NOT restart the conversation.
+
+When you have the mandatory info, call the find_vendors tool, then present the results \
+warmly and concisely (the UI shows the vendor cards + drafted message, so don't repeat \
+the full list verbatim — just summarise and tell them what happens next: they pick or \
+you can send the RFQ). If the employee changes something (quantity, date, veg/non-veg, \
+address), update it and call find_vendors again."""
+
+FIND_VENDORS_TOOL = {
+    "name": "find_vendors",
+    "description": ("Search live for verified vendors matching the requirement and draft "
+                    "an RFQ. Only call once you have category, quantity, city, and the exact "
+                    "delivery_address. Call again whenever the requirement changes."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string",
+                         "enum": ["fb", "water", "stationery", "it_hardware", "hotel", "flights", "generic"]},
+            "item": {"type": "string", "description": "specific item, e.g. 'non-veg snacks', 'A4 paper'"},
+            "quantity": {"type": "number", "description": "people for fb/hotel/flights, units otherwise"},
+            "city": {"type": "string"},
+            "delivery_address": {"type": "string", "description": "building / floor / area + landmark"},
+            "needed_by": {"type": "string", "description": "YYYY-MM-DD if a date was given, else omit"},
+            "budget": {"type": "string", "description": "free text e.g. '₹100/person' or '40k', if given"},
+            "special_requirements": {"type": "string"},
+        },
+        "required": ["category", "city", "delivery_address"],
+    },
+}
+
+_SESSIONS: dict[str, list] = {}
 
 
-def _parse_budget(s: str):
-    t = s.lower().replace("rs", "").replace("inr", "").replace("₹", "").replace(",", "").strip()
-    mult = 1
-    if t.endswith("k"):
-        mult, t = 1000, t[:-1].strip()
-    elif "lakh" in t or t.endswith("l"):
-        mult, t = 100000, t.replace("lakh", "").rstrip("l").strip()
-    try:
-        return float(t) * mult
-    except ValueError:
-        return s
+def _intent_from_args(a: dict) -> dict:
+    return {
+        "category": a.get("category", "generic"),
+        "subcategory": a.get("item"),
+        "quantity": a.get("quantity"),
+        "location": a.get("city"),
+        "delivery_address": a.get("delivery_address"),
+        "needed_by": a.get("needed_by"),
+        "budget_hint": a.get("budget"),
+        "special_requirements": a.get("special_requirements"),
+        "gst_required": True,
+    }
 
 
-def _next_prompt(state: dict) -> str | None:
-    """The next question to ask, or None when all mandatory fields are present."""
-    intent = state["intent"]
-    required = [q for q in clarifying_questions(intent) if q["required"]]
-    if required:
-        state["pending"] = required[0]["field"]
-        return required[0]["ask"]
-    if not state["budget_asked"] and not intent.get("budget_hint"):
-        state["pending"] = "budget"
-        state["budget_asked"] = True
-        return "Any budget cap for this? (optional — reply 'skip')"
-    state["pending"] = None
-    return None
-
-
-async def _run_pipeline(intent: dict) -> dict:
-    """Live discovery + RFQ draft for the top vendor. No messages sent."""
+async def _find_vendors(args: dict) -> tuple[str, dict]:
+    """Run live discovery + draft the RFQ. Returns (summary_for_model, ui_data)."""
+    intent = _intent_from_args(args)
     agent = PlacesAgent(known_vendors_fn=get_store().get_known_vendors)
     vendors = await agent.search(intent, limit=TOP_N)
-    out = [{"name": v.get("name"), "phone": v.get("phone"),
-            "rating": v.get("google_rating"), "reviews": v.get("review_count"),
-            "address": v.get("address")} for v in vendors]
+    cards = [{"name": v.get("name"), "phone": v.get("phone"), "rating": v.get("google_rating"),
+              "reviews": v.get("review_count"), "address": v.get("address")} for v in vendors]
     rfq = None
     reachable = [v for v in vendors if v.get("phone")]
     if reachable:
         params = _rfq_template_params(reachable[0]["name"], intent, ref_code_for_goal("chat-demo"))
         rfq = TEMPLATE_BODY.format(*params)
-    return {"vendors": out, "rfq": rfq}
+    summary = (f"Found {len(cards)} verified vendors: "
+               + "; ".join(f"{c['name']} (⭐{c['rating']}, {c['reviews']} reviews)" for c in cards)
+               + ". A draft RFQ to the top vendor is ready. (These are shown to the user as cards.)")
+    return summary, {"vendors": cards, "rfq": rfq}
 
 
 @router.post("/chat/message")
 async def chat_message(request: Request) -> dict:
+    from anthropic import AsyncAnthropic
+
     body = await request.json()
     session = body.get("session", "default")
     text = (body.get("message") or "").strip()
-    state = _SESSIONS.setdefault(session, {"intent": None, "pending": None, "budget_asked": False})
+    history = _SESSIONS.setdefault(session, [])
+    history.append({"role": "user", "content": text})
 
-    ack = None
-    if state["intent"] is None:
-        intent = await parse_intent(text, COMPANY_CITY)
-        state["intent"] = intent
-        ack = (f"Got it — {_human_requirement(intent)}, needed by {_human_needed_by(intent)}, "
-               f"GST {'required' if intent.get('gst_required', True) else 'not needed'}.")
-    else:
-        field = state["pending"]
-        if field == "budget":
-            if text.lower() != "skip":
-                state["intent"]["budget_hint"] = _parse_budget(text)
-        elif field:
-            state["intent"][field] = text
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    system = SYSTEM.format(today=date.today().isoformat())
+    ui_data: dict = {}
 
-    nxt = _next_prompt(state)
-    if nxt:
-        return {"reply": (ack + "\n\n" if ack else "") + nxt, "done": False}
+    try:
+        for _ in range(5):  # allow a tool round-trip or two
+            resp = await client.messages.create(
+                model=CHAT_MODEL, max_tokens=1024, temperature=0,
+                system=system, tools=[FIND_VENDORS_TOOL], messages=history,
+            )
+            # Persist the assistant turn (reconstruct clean blocks for re-sending).
+            assistant_blocks: list = []
+            for b in resp.content:
+                if b.type == "text":
+                    assistant_blocks.append({"type": "text", "text": b.text})
+                elif b.type == "tool_use":
+                    assistant_blocks.append({"type": "tool_use", "id": b.id,
+                                             "name": b.name, "input": b.input})
+            history.append({"role": "assistant", "content": assistant_blocks})
 
-    result = await _run_pipeline(state["intent"])
-    _SESSIONS.pop(session, None)  # reset so the next goal starts fresh
-    intro = (ack + "\n\n" if ack else "") + "Here are the best-matched, verified vendors:"
-    return {"reply": intro, "done": True, **result}
+            if resp.stop_reason == "tool_use":
+                results = []
+                for b in resp.content:
+                    if b.type == "tool_use" and b.name == "find_vendors":
+                        summary, data = await _find_vendors(b.input)
+                        ui_data = data
+                        results.append({"type": "tool_result", "tool_use_id": b.id, "content": summary})
+                history.append({"role": "user", "content": results})
+                continue
+
+            reply = "".join(b.text for b in resp.content if b.type == "text").strip()
+            return {"reply": reply or "…", "done": bool(ui_data), **ui_data}
+    except Exception as e:  # noqa: BLE001 — surface a friendly message in the demo UI
+        log.exception("chat agent error")
+        return {"reply": f"(agent error: {e})", "done": False}
+
+    return {"reply": "Sorry, I got stuck — could you rephrase?", "done": False}
 
 
 @router.get("/chat", response_class=HTMLResponse)
@@ -134,7 +186,6 @@ _CHAT_HTML = """<!doctype html>
   .vendors { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
   .v { background:#1d2230; border:1px solid #2a3040; border-radius:10px; padding:10px 12px; }
   .v b { color:#fff; } .v .meta { color:var(--muted); font-size:13px; }
-  .v a { color:#7aa2ff; text-decoration:none; }
   .rfq { margin-top:10px; background:#16261c; border:1px solid #234; border-left:3px solid #3fb950;
     padding:10px 12px; border-radius:8px; color:#cfe8d6; font-size:14px; }
   .tag { display:inline-block; font-size:11px; color:#9fb0ff; background:#1b2030; padding:1px 7px;
