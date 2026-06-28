@@ -74,8 +74,11 @@ events. Do NOT assume the delivery city from the company HQ — ask which city/a
 never pre-write a city (e.g. "in Bengaluru") into your questions.
 ALWAYS ASK for a budget once (a per-unit / per-person target or a total) — it is optional \
 to ANSWER (the user may say "skip" / "open to best quote" and you proceed), but you must \
-ask, because without a budget in the RFQ vendors quote blind and it causes avoidable \
-back-and-forth. Whatever the user gives (or skips) is carried into the RFQ automatically.
+ask, because without a budget vendors quote blind and it causes avoidable back-and-forth. \
+When the user GIVES a budget, also ask whether to SHARE it with vendors or keep it PRIVATE, \
+and set `budget_visibility` accordingly ('show' = put an indicative figure in the RFQ, fewer \
+rounds; 'internal' = keep it private for better price discovery, RFQ says "open to best \
+quote"). Default to 'show' if they don't care. The choice is carried into the RFQ.
 
 ALSO gather the few attributes that materially change WHICH vendor fits and the price — \
 this is how you vet well and avoid a generic list. Ask them conversationally (2-3 at a \
@@ -92,11 +95,13 @@ live counter); delivery time on the day; any setup / crockery / staff.
 GROUNDED VETTING: after find_vendors you receive each vendor's phone, address, website, \
 rating + review count, business status, a Google AI "review summary" (a digest of what \
 reviewers say about quality, service, timeliness), AND a structured service-risk assessment \
-(level low/medium/high/unknown + delivery/service/quality signals) derived ONLY from that \
-summary. Vendors are already ordered best-vetted-first (high-risk last). USE this data — you \
-DO have their contact details, so never say you can't show them. Lead with the low-risk \
-vendors, explicitly flag any high-risk one and why, and treat 'unknown' as "no review data \
-yet" (unproven, NOT bad). Never rate a vendor better or worse than its summary supports. When asked about quality, delivery, \
+(level low/medium/high/unknown, a 0-100 service score, + delivery/service/quality signals) \
+derived ONLY from that summary. Vendors are already ordered best-vetted-first. USE this data \
+— you DO have their contact details, so never say you can't show them. Lead with the low-risk \
+/ high-score vendors and treat 'unknown' as "no review data yet" (unproven, NOT bad). NEVER \
+default the RFQ to a HIGH-risk vendor — surface high-risk ones separately as flagged / not \
+recommended, with the grounded reason, and only address the RFQ to one if the user explicitly \
+insists. Never rate a vendor better or worse than its summary supports. When asked about quality, delivery, \
 after-sales or complaints, READ the review summary and give a grounded, comparative answer: \
 cite what each summary says, call out any weak/negative service or delivery signals, and \
 rank who looks strongest for THIS order. Frame it as "based on Google's review summary" — \
@@ -133,6 +138,10 @@ FIND_VENDORS_TOOL = {
             "delivery_address": {"type": "string", "description": "building / floor / area + landmark"},
             "needed_by": {"type": "string", "description": "YYYY-MM-DD if a date was given, else omit"},
             "budget": {"type": "string", "description": "free text e.g. '₹100/person' or '40k', if given"},
+            "budget_visibility": {"type": "string", "enum": ["show", "internal"],
+                                  "description": ("whether to reveal the budget to vendors in the RFQ "
+                                  "('show', fewer rounds) or keep it private ('internal', better price "
+                                  "discovery). Set from the user's choice; default 'show'.")},
             "search_terms": {"type": "string", "description": ("focused Google search phrase "
                              "reflecting the gathered attributes, e.g. 'non-veg North Indian "
                              "corporate caterers' — drives vendor discovery")},
@@ -161,6 +170,7 @@ def _intent_from_args(a: dict) -> dict:
         "delivery_address": a.get("delivery_address"),
         "needed_by": a.get("needed_by"),
         "budget_hint": a.get("budget"),
+        "budget_visibility": a.get("budget_visibility"),  # 'show' | 'internal' (user's choice)
         "search_terms": a.get("search_terms"),       # focused Places query from the agent
         "special_requirements": a.get("special_requirements"),
         "check_in": a.get("check_in"),
@@ -191,14 +201,16 @@ def _vendor_block(i: int, v: dict) -> str:
     lines.append(f"   review summary (Google AI digest of reviews): {summary}" if summary
                  else "   review summary: none returned")
     r = v.get("risk") or {}
-    lines.append(f"   service-risk: {r.get('level', 'unknown')} "
-                 f"(delivery:{r.get('delivery')}, service:{r.get('service')}, quality:{r.get('quality')})"
+    score = r.get("score")
+    lines.append(f"   service-risk: {r.get('level', 'unknown')}"
+                 + (f" (score {score}/100)" if isinstance(score, (int, float)) else "")
+                 + f" — delivery:{r.get('delivery')}, service:{r.get('service')}, quality:{r.get('quality')}"
                  + (f" — {r['note']}" if r.get('note') else ""))
     return "\n".join(lines)
 
 
 _RISK_RANK = {"low": 0, "medium": 1, "unknown": 2, "high": 3}
-_DEFAULT_RISK = {"level": "unknown", "delivery": "not_mentioned",
+_DEFAULT_RISK = {"level": "unknown", "score": None, "delivery": "not_mentioned",
                  "service": "not_mentioned", "quality": "not_mentioned", "note": ""}
 
 
@@ -217,10 +229,13 @@ async def _assess_risk(vendors: list[dict]) -> None:
         "risk using ONLY the Google review summary text given — do NOT use outside knowledge "
         "and do NOT invent anything. If a summary is empty, its level is 'unknown'. Use 'high' "
         "ONLY when the summary itself signals negative delivery/service/quality; 'low' when it "
-        "clearly praises service/delivery/reliability; 'medium' for mixed/thin positive.\n\n"
+        "clearly praises service/delivery/reliability; 'medium' for mixed/thin positive. Also "
+        "give a 0-100 'score' = service confidence from the summary (100 = strong positive "
+        "service/delivery signals, ~50 = thin/mixed, low = negative); use null if no summary.\n\n"
         + json.dumps(rated) +
         '\n\nReturn ONLY a JSON array (same order, one object per vendor):\n'
-        '[{"i":0,"level":"low|medium|high|unknown","delivery":"positive|negative|not_mentioned",'
+        '[{"i":0,"level":"low|medium|high|unknown","score":0-100 or null,'
+        '"delivery":"positive|negative|not_mentioned",'
         '"service":"positive|negative|not_mentioned","quality":"positive|negative|not_mentioned",'
         '"note":"<=8-word grounded phrase quoting the summary\'s signal"}]'
     )
@@ -247,7 +262,10 @@ def _draft_rfq(intent: dict, vendor_name: str, code: str) -> str:
     cat = (intent.get("category") or "").lower()
     v, requirement, place, needed_by, c = _rfq_template_params(vendor_name, intent, code)
     b = intent.get("budget_hint")
-    budget = f" Our indicative budget is {b}." if b else " We're open to your best competitive quote."
+    # Budget visibility is the user's choice: 'show' reveals an indicative figure (fewer
+    # rounds), 'internal' keeps it private (better price discovery). Default: show.
+    show_budget = b and (intent.get("budget_visibility") or "show") == "show"
+    budget = f" Our indicative budget is {b}." if show_budget else " We're open to your best competitive quote."
     if cat == "hotel":
         ci = intent.get("check_in") or needed_by
         co = intent.get("check_out") or "TBD"
@@ -270,10 +288,18 @@ async def _find_vendors(args: dict) -> tuple[str, dict]:
     intent = _intent_from_args(args)
     agent = PlacesAgent(known_vendors_fn=get_store().get_known_vendors)
     vendors = await agent.search(intent, limit=TOP_N)
-    # Deepen vetting: score service risk from review summaries, then down-rank weak
-    # vendors (high risk last). Stable sort preserves credibility order within a tier.
+    # Deepen vetting: score service risk from review summaries, then rank by risk
+    # level, then by numeric service score (desc). Stable sort keeps credibility order
+    # as the final tiebreak. High-risk vendors fall to the bottom.
     await _assess_risk(vendors)
-    vendors.sort(key=lambda v: _RISK_RANK.get((v.get("risk") or {}).get("level", "unknown"), 2))
+
+    def _rank_key(v):
+        r = v.get("risk") or {}
+        s = r.get("score")
+        return (_RISK_RANK.get(r.get("level", "unknown"), 2),
+                -(s if isinstance(s, (int, float)) else -1))
+
+    vendors.sort(key=_rank_key)
     cards = [{"name": _clean_name(v.get("name")), "phone": v.get("phone"), "rating": v.get("google_rating"),
               "reviews": v.get("review_count"), "address": v.get("address"), "website": v.get("website"),
               "summary": v.get("review_summary"), "risk": v.get("risk")}
@@ -281,11 +307,13 @@ async def _find_vendors(args: dict) -> tuple[str, dict]:
     rfq = None
     reachable = [v for v in vendors if v.get("phone")]
     if reachable:
-        # Bind the RFQ recipient to the vendor the model recommends (prose + artifact
-        # must agree); fall back to the top-ranked reachable vendor when unset/unmatched.
+        # Recipient: honour an explicit recommended_vendor (even if high-risk = the user's
+        # call); otherwise auto-EXCLUDE high-risk and default to the best non-high vendor.
         rec = (args.get("recommended_vendor") or "").strip().lower()
-        chosen = next((v for v in reachable if rec and rec in _clean_name(v.get("name")).lower()),
-                      reachable[0])
+        chosen = next((v for v in reachable if rec and rec in _clean_name(v.get("name")).lower()), None)
+        if chosen is None:
+            non_high = [v for v in reachable if (v.get("risk") or {}).get("level") != "high"]
+            chosen = (non_high or reachable)[0]
         rfq = _draft_rfq(intent, _clean_name(chosen["name"]), ref_code_for_goal("chat-demo"))
     blocks = "\n\n".join(_vendor_block(i, v) for i, v in enumerate(vendors, 1))
     summary = (f"Found {len(vendors)} verified vendors. Full details + recent review snippets "
@@ -398,7 +426,8 @@ _CHAT_HTML = """<!doctype html>
     r.innerHTML='<div class="bubble">'+html+'</div>'; log.appendChild(r); log.scrollTop=log.scrollHeight; return r; }
   function riskBadge(r){ if(!r||!r.level) return '';
     var c={low:'#2ea043',medium:'#d29922',high:'#f85149',unknown:'#6e7681'}[r.level]||'#6e7681';
-    return ' <span style="background:'+c+';color:#fff;font-size:11px;padding:1px 7px;border-radius:6px">risk: '+esc(r.level)+'</span>'; }
+    var s=(typeof r.score==='number')?' '+r.score+'/100':'';
+    return ' <span style="background:'+c+';color:#fff;font-size:11px;padding:1px 7px;border-radius:6px">risk: '+esc(r.level)+s+'</span>'; }
   function vendorsHtml(vs){ if(!vs||!vs.length) return '';
     return '<div class="vendors">'+vs.map((v,i)=>'<div class="v"><b>'+(i+1)+'. '+esc(v.name)+'</b>'+riskBadge(v.risk)
       +' <span class="meta">— '+(v.phone?esc(v.phone):'no phone')+' · ⭐'+(v.rating??'?')+' ('+(v.reviews??0)+')</span>'
