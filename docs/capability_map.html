@@ -1,0 +1,96 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProcureOS — Capability Map</title>
+<style>
+  body{margin:0;background:#f7f8fa;color:#1f2a37;font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
+  .wrap{max-width:880px;margin:0 auto;background:#fff;border:1px solid #e6e9ee;border-radius:12px;padding:16px}
+  svg text{font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+</style></head>
+<body><div class="wrap">
+<svg width="100%" viewBox="0 0 680 706" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>ProcureOS capability map</title>
+<desc>End-to-end procurement loop, channels, categories, trust core, and future moat layers, color-coded live/building/planned.</desc>
+<defs><marker id="ah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa4b2"/></marker></defs>
+
+<text x="40" y="30" font-size="19" font-weight="700" fill="#1f2a37">ProcureOS — capability map</text>
+
+<!-- legend -->
+<rect x="40" y="44" width="12" height="12" rx="3" fill="#e7f6ec" stroke="#76c79a"/>
+<text x="58" y="54" font-size="11" fill="#3a4654">Live</text>
+<rect x="120" y="44" width="12" height="12" rx="3" fill="#fdf0d5" stroke="#e5b860"/>
+<text x="138" y="54" font-size="11" fill="#3a4654">Building</text>
+<rect x="214" y="44" width="12" height="12" rx="3" fill="#eef1f5" stroke="#c3ccd6"/>
+<text x="232" y="54" font-size="11" fill="#3a4654">Planned</text>
+
+<text x="40" y="84" font-size="13" font-weight="700" fill="#1f2a37">The core loop</text>
+
+<!-- row 1 -->
+<g><rect x="40" y="96" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="107" y="118" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">1 · Intake</text><text x="107" y="133" text-anchor="middle" font-size="9.5" fill="#2f8f5b">chat, multi-model</text></g>
+<g><rect x="195" y="96" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="262" y="118" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">2 · Intent</text><text x="262" y="133" text-anchor="middle" font-size="9.5" fill="#2f8f5b">LLM parse</text></g>
+<g><rect x="350" y="96" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="417" y="118" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">3 · Discover</text><text x="417" y="133" text-anchor="middle" font-size="9.5" fill="#2f8f5b">Google Places</text></g>
+<g><rect x="505" y="96" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="572" y="118" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">4 · Vet &amp; rank</text><text x="572" y="133" text-anchor="middle" font-size="9.5" fill="#2f8f5b">risk + sentiment</text></g>
+<line x1="177" y1="119" x2="191" y2="119" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="332" y1="119" x2="346" y2="119" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="487" y1="119" x2="501" y2="119" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="572" y1="143" x2="572" y2="164" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<!-- row 2 -->
+<g><rect x="505" y="166" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="572" y="188" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">5 · Draft RFQ</text><text x="572" y="203" text-anchor="middle" font-size="9.5" fill="#2f8f5b">category-aware</text></g>
+<g><rect x="350" y="166" width="135" height="46" rx="8" fill="#fdf0d5" stroke="#f0d28a"/><text x="417" y="188" text-anchor="middle" font-size="13" font-weight="600" fill="#8a5a12">6 · Outreach</text><text x="417" y="203" text-anchor="middle" font-size="9.5" fill="#b07d22">WhatsApp live</text></g>
+<g><rect x="195" y="166" width="135" height="46" rx="8" fill="#fdf0d5" stroke="#f0d28a"/><text x="262" y="188" text-anchor="middle" font-size="13" font-weight="600" fill="#8a5a12">7 · Collect quotes</text><text x="262" y="203" text-anchor="middle" font-size="9.5" fill="#b07d22">inbound pending</text></g>
+<g><rect x="40" y="166" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="107" y="188" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">8 · Rank options</text><text x="107" y="203" text-anchor="middle" font-size="9.5" fill="#2f8f5b">best-first</text></g>
+<line x1="503" y1="189" x2="489" y2="189" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="348" y1="189" x2="334" y2="189" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="193" y1="189" x2="179" y2="189" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="107" y1="213" x2="107" y2="234" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<!-- row 3 -->
+<g><rect x="40" y="236" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="107" y="258" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">9 · Approve</text><text x="107" y="273" text-anchor="middle" font-size="9.5" fill="#2f8f5b">Slack, 1 tap</text></g>
+<g><rect x="195" y="236" width="135" height="46" rx="8" fill="#fdf0d5" stroke="#f0d28a"/><text x="262" y="258" text-anchor="middle" font-size="13" font-weight="600" fill="#8a5a12">10 · Pay</text><text x="262" y="273" text-anchor="middle" font-size="9.5" fill="#b07d22">Razorpay test</text></g>
+<g><rect x="350" y="236" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="417" y="258" text-anchor="middle" font-size="13" font-weight="600" fill="#14633a">11 · Deliver</text><text x="417" y="273" text-anchor="middle" font-size="9.5" fill="#2f8f5b">tracked</text></g>
+<g><rect x="505" y="236" width="135" height="46" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="572" y="256" text-anchor="middle" font-size="12.5" font-weight="600" fill="#14633a">12 · Rate→score</text><text x="572" y="273" text-anchor="middle" font-size="9.5" fill="#2f8f5b">vendor graph</text></g>
+<line x1="177" y1="259" x2="191" y2="259" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="332" y1="259" x2="346" y2="259" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="487" y1="259" x2="501" y2="259" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<!-- channels -->
+<text x="40" y="312" font-size="13" font-weight="700" fill="#1f2a37">Channels (how vendors are reached)</text>
+<g><rect x="40" y="322" width="135" height="40" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/><text x="107" y="340" text-anchor="middle" font-size="12" font-weight="600" fill="#14633a">WhatsApp</text><text x="107" y="354" text-anchor="middle" font-size="9.5" fill="#2f8f5b">send live</text></g>
+<g><rect x="195" y="322" width="135" height="40" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="262" y="340" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">In-app notify</text><text x="262" y="354" text-anchor="middle" font-size="9.5" fill="#6b7787">planned</text></g>
+<g><rect x="350" y="322" width="135" height="40" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="417" y="340" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Email</text><text x="417" y="354" text-anchor="middle" font-size="9.5" fill="#6b7787">for aggregators</text></g>
+<g><rect x="505" y="322" width="135" height="40" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="572" y="340" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Phone call</text><text x="572" y="354" text-anchor="middle" font-size="9.5" fill="#6b7787">fallback</text></g>
+
+<!-- categories -->
+<text x="40" y="388" font-size="13" font-weight="700" fill="#1f2a37">Categories</text>
+<g><rect x="40" y="398" width="91" height="32" rx="7" fill="#e7f6ec" stroke="#bfe6cd"/><text x="85" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#14633a">F&amp;B</text></g>
+<g><rect x="141" y="398" width="91" height="32" rx="7" fill="#e7f6ec" stroke="#bfe6cd"/><text x="186" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#14633a">Water</text></g>
+<g><rect x="242" y="398" width="91" height="32" rx="7" fill="#e7f6ec" stroke="#bfe6cd"/><text x="287" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#14633a">Stationery</text></g>
+<g><rect x="343" y="398" width="91" height="32" rx="7" fill="#e7f6ec" stroke="#bfe6cd"/><text x="388" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#14633a">IT hardware</text></g>
+<g><rect x="444" y="398" width="91" height="32" rx="7" fill="#e7f6ec" stroke="#bfe6cd"/><text x="489" y="418" text-anchor="middle" font-size="11" font-weight="600" fill="#14633a">Hotels</text></g>
+<g><rect x="545" y="398" width="95" height="32" rx="7" fill="#eef1f5" stroke="#d6dde5"/><text x="592" y="414" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Flights</text><text x="592" y="426" text-anchor="middle" font-size="8.5" fill="#6b7787">needs aggregators</text></g>
+
+<!-- trust core -->
+<rect x="40" y="446" width="600" height="56" rx="8" fill="#e7f6ec" stroke="#bfe6cd"/>
+<text x="56" y="466" font-size="12.5" font-weight="700" fill="#14633a">Trust &amp; reliability core — hardened (4 red-team rounds)</text>
+<text x="56" y="482" font-size="10" fill="#2f7d54">anti-hallucination · grounded sentiment · read-only safety · address gate · injection-resistant</text>
+<text x="56" y="496" font-size="10" fill="#2f7d54">5 money/concurrency Fixes · multi-model fallback (Claude→Groq) · 141 tests</text>
+
+<!-- moat -->
+<text x="40" y="534" font-size="13" font-weight="700" fill="#1f2a37">The moat — what's next</text>
+<text x="40" y="550" font-size="10" fill="#6b7787">Per-company partner graph (reuse-first):</text>
+<g><rect x="40" y="558" width="135" height="38" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="107" y="582" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Cold</text></g>
+<g><rect x="195" y="558" width="135" height="38" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="262" y="582" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Tried</text></g>
+<g><rect x="350" y="558" width="135" height="38" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="417" y="582" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Partner</text></g>
+<g><rect x="505" y="558" width="135" height="38" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="572" y="582" text-anchor="middle" font-size="12" font-weight="600" fill="#3a4654">Preferred</text></g>
+<line x1="177" y1="577" x2="191" y2="577" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="332" y1="577" x2="346" y2="577" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+<line x1="487" y1="577" x2="501" y2="577" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#ah)"/>
+
+<text x="40" y="624" font-size="10" fill="#6b7787">Intelligence &amp; business layers:</text>
+<g><rect x="40" y="632" width="112" height="36" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="96" y="654" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Aggregators</text></g>
+<g><rect x="162" y="632" width="112" height="36" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="218" y="654" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Channel AI</text></g>
+<g><rect x="284" y="632" width="112" height="36" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="340" y="654" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Analytics</text></g>
+<g><rect x="406" y="632" width="112" height="36" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="462" y="654" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Monetize</text></g>
+<g><rect x="528" y="632" width="112" height="36" rx="8" fill="#eef1f5" stroke="#d6dde5"/><text x="584" y="654" text-anchor="middle" font-size="11" font-weight="600" fill="#3a4654">Fine-tune</text></g>
+</svg>
+</div></body></html>

@@ -146,6 +146,7 @@ class Store(Protocol):
     # goal creation + quote collection + orders (GoalProcessor capstone)
     async def create_goal(self, goal: Goal) -> str: ...
     async def get_company(self, company_id: str) -> Company: ...
+    async def get_or_create_company(self, name: str, slack_channel: str | None = None) -> str: ...
     async def get_employee(self, employee_id: str) -> Employee | None: ...
     async def add_collected_quote(self, goal_id: str, quote: dict) -> None: ...
     async def get_collected_quotes(self, goal_id: str) -> list[dict]: ...
@@ -302,6 +303,15 @@ class InMemoryStore:
 
     async def get_company(self, company_id: str) -> Company:
         return self._companies[company_id]
+
+    async def get_or_create_company(self, name: str, slack_channel: str | None = None) -> str:
+        for cid, c in self._companies.items():
+            if c.name == name:
+                return cid
+        cid = f"co-{len(self._companies) + 1}"
+        self._companies[cid] = Company(id=cid, name=name, budget_policies={"default": 100000},
+                                       slack_approval_channel=slack_channel)
+        return cid
 
     async def get_employee(self, employee_id: str) -> Employee | None:
         return self._employees.get(employee_id)
@@ -553,6 +563,16 @@ class SupabaseStore:
         return Company(id=str(r["id"]), name=r["name"], budget_policies=r["budget_policies"] or {},
                        approval_chain=r["approval_chain"] or {}, approver_email=r["approver_email"],
                        slack_approval_channel=r["slack_approval_channel"], waba_number=r["waba_number"])
+
+    async def get_or_create_company(self, name: str, slack_channel: str | None = None) -> str:
+        existing = await self._val("SELECT id FROM companies WHERE name=$1 LIMIT 1", name)
+        if existing:
+            return str(existing)
+        new_id = await self._val(
+            "INSERT INTO companies (name, budget_policies, slack_approval_channel) "
+            "VALUES ($1, $2::jsonb, $3) RETURNING id",
+            name, {"default": 100000}, slack_channel)
+        return str(new_id)
 
     async def get_employee(self, employee_id) -> Employee | None:
         r = await self._row("SELECT id, name, whatsapp, company_id FROM employees WHERE id=$1::uuid", employee_id)
