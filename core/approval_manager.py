@@ -19,7 +19,7 @@ from core.state_machine import GoalState, transition_goal_state
 
 log = logging.getLogger(__name__)
 
-_default_store: Store = SupabaseStore()
+from core.store import get_store  # lazy shared store (no eager SupabaseStore; avoids split-brain)
 
 # Fix 12: magic-link approval tokens — 4-hour TTL, one-time use.
 APPROVAL_LINK_TTL_SECONDS = 14400
@@ -67,7 +67,7 @@ async def check_approval_before_payment(
     the approver, move the goal back to pending_approval, and return False
     (payment must NOT proceed).
     """
-    store = store or _default_store
+    store = store or get_store()
     goal = await store.get_goal(goal_id)
     ttl = APPROVAL_TTL.get(goal.category, DEFAULT_APPROVAL_TTL)
     # Staleness clock starts when the options were PRESENTED (approval_sent_at),
@@ -105,7 +105,7 @@ async def re_fetch_and_notify_approver(
     `specialist_agent` (vendor search) and `send_approval_notification` are
     injected — they belong to the agent/notification layers built in Phase 2.
     """
-    store = store or _default_store
+    store = store or get_store()
     if specialist_agent is None or send_approval_notification is None:
         raise NotImplementedError(
             "re_fetch_and_notify_approver needs the specialist agent + notifier "
@@ -134,7 +134,7 @@ async def generate_approval_token(
     ttl_seconds: int = APPROVAL_LINK_TTL_SECONDS,
 ) -> str:
     """Create a one-time, TTL-bounded token for an emailed approval link."""
-    store = store or _default_store
+    store = store or get_store()
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
     await store.create_approval_token(
@@ -146,7 +146,7 @@ async def generate_approval_token(
 async def consume_approval_token(token: str, *, store: Store | None = None) -> str:
     """Validate + burn a magic-link token. Returns the goal_id, or raises
     ApprovalTokenError (unknown / already used / expired)."""
-    store = store or _default_store
+    store = store or get_store()
     rec = await store.get_approval_token(token)
     if rec is None:
         raise ApprovalTokenError("unknown approval token")
@@ -192,7 +192,7 @@ async def approve_goal(
         idempotent payment INSIDE the lock
       - move to 'ordered'; on any payment failure move to 'payment_failed'
     """
-    store = store or _default_store
+    store = store or get_store()
     goal = await store.get_goal(goal_id)
     if goal.status != GoalState.PENDING_APPROVAL.value:
         raise StateConflictError(f"goal {goal_id} is '{goal.status}', not pending_approval")
@@ -249,7 +249,7 @@ async def approve_goal(
 async def reject_goal(goal_id: str, reason: str, *, store: Store | None = None, redis=None) -> dict:
     """Reject the options. For now this cancels the goal; the rejection-feedback
     refinement loop (goal_refiner) is wired in a later increment."""
-    store = store or _default_store
+    store = store or get_store()
     goal = await store.get_goal(goal_id)
     if goal.status != GoalState.PENDING_APPROVAL.value:
         raise StateConflictError(f"goal {goal_id} is '{goal.status}', not pending_approval")

@@ -25,7 +25,7 @@ from core.waba_handlers import DefaultWabaHandlers
 from core.waba_router import route_incoming_whatsapp
 from services.razorpay import verify_razorpay_signature
 from services.slack_notifier import APPROVE_ACTION_ID, REJECT_ACTION_ID, verify_slack_signature
-from services.whatsapp import normalize_inbound, verify_meta_signature
+from services.whatsapp import normalize_inbound, verify_inbound_signature
 
 router = APIRouter(tags=["webhooks"])
 log = logging.getLogger(__name__)
@@ -87,12 +87,14 @@ async def whatsapp_verify(request: Request):
 
 @router.post("/webhook/whatsapp")
 async def whatsapp_inbound(request: Request):
-    """Inbound WhatsApp events → waba_router (Fix 06). HMAC-verified on the raw
-    body. The payload is passed to the router as-is; a Chat-Mitra-specific
-    normalizer is added here once their exact webhook shape is confirmed."""
+    """Inbound WhatsApp events → waba_router (Fix 06). HMAC-verified on the raw body,
+    auto-detecting Chat Mitra (X-Webhook-Signature, hmac_sha256) or Meta
+    (X-Hub-Signature-256). normalize_inbound handles either payload shape."""
     raw = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_meta_signature(body=raw, signature_header=signature):
+    # Log the raw inbound (truncated) so the FIRST real Chat Mitra webhook reveals its
+    # exact payload shape — lets us pin _normalize_chatmitra precisely. Safe: no secrets.
+    log.info("inbound whatsapp webhook (%d bytes): %s", len(raw), raw.decode("utf-8", "replace")[:1000])
+    if not verify_inbound_signature(body=raw, headers=request.headers):
         return JSONResponse(err("invalid_signature", "WhatsApp signature verification failed"), status_code=401)
 
     try:

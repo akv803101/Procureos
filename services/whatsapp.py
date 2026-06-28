@@ -37,6 +37,38 @@ def verify_meta_signature(*, body: bytes, signature_header: str, secret: str | N
     return hmac.compare_digest(signature_header[len("sha256="):], expected)
 
 
+def verify_chatmitra_signature(*, body: bytes, signature_header: str, secret: str | None = None) -> bool:
+    """Verify a Chat Mitra inbound webhook HMAC.
+
+    Per the Chat Mitra dashboard: header `X-Webhook-Signature`, scheme
+    `hmac_sha256(secret, body)` (raw hex; a leading 'sha256=' is tolerated).
+    Constant-time; fails closed if no secret is configured.
+    """
+    secret = secret if secret is not None else settings.meta_webhook_secret
+    if not secret:
+        log.warning("webhook secret not set — refusing inbound WhatsApp webhook")
+        return False
+    if not signature_header:
+        return False
+    sig = signature_header[len("sha256="):] if signature_header.startswith("sha256=") else signature_header
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig.strip(), expected)
+
+
+def verify_inbound_signature(*, body: bytes, headers, secret: str | None = None) -> bool:
+    """Verify whichever signature header is present — Chat Mitra's `X-Webhook-Signature`
+    (hmac_sha256 hex) or Meta's `X-Hub-Signature-256` (sha256=hex). Fails closed when
+    neither header nor a secret is present. `headers` is a case-insensitive mapping."""
+    cm = headers.get("x-webhook-signature")
+    if cm:
+        return verify_chatmitra_signature(body=body, signature_header=cm, secret=secret)
+    meta = headers.get("x-hub-signature-256")
+    if meta:
+        return verify_meta_signature(body=body, signature_header=meta, secret=secret)
+    log.warning("inbound webhook missing signature header (X-Webhook-Signature / X-Hub-Signature-256)")
+    return False
+
+
 async def _default_send(to: str, body: str) -> dict:
     import httpx
 
@@ -159,6 +191,11 @@ def normalize_inbound(payload: dict) -> dict:
     If Chat Mitra's exact inbound shape differs from Meta's, THIS is the only
     function that changes — the router and handlers are unaffected.
     """
+    # Chat Mitra envelope: {"event": "message.received" | "message.sent" |
+    # "message.status.updated", ...}. Only inbound messages matter; ignore the rest.
+    event = payload.get("event")
+    if event:
+        return _normalize_chatmitra(payload) if event == "message.received" else {}
     if payload.get("from"):
         return payload  # already flat
     try:
@@ -181,4 +218,30 @@ def normalize_inbound(payload: dict) -> dict:
         out["type"] = "interactive"
         out["interactive"] = {"button_reply": {"id": btn.get("payload") or ""}}
         out["text"] = btn.get("text", "")
+    return out
+
+
+def _normalize_chatmitra(payload: dict) -> dict:
+    """Map a Chat Mitra `message.received` event to the flat router shape.
+
+    Chat Mitra's exact field names aren't pinned to a captured payload yet, so this
+    extracts defensively from the common containers/keys; the inbound route logs the
+    raw body, so the first real webhook lets us tighten this exactly. Only the sender
+    + text/button are needed for routing (Fix 06)."""
+    m = payload.get("data") or payload.get("message") or payload.get("payload") or payload
+    sender = (m.get("from") or m.get("sender") or m.get("wa_id") or m.get("phone")
+              or m.get("contact") or "")
+    text = m.get("text")
+    if isinstance(text, dict):
+        text = text.get("body") or text.get("text") or ""
+    text = text or m.get("body") or m.get("message") or ""
+    out = {"from": sender, "type": m.get("type") or "text", "text": text}
+    if m.get("interactive"):
+        out["type"] = "interactive"
+        out["interactive"] = m.get("interactive")
+    elif m.get("button"):
+        btn = m.get("button") or {}
+        out["type"] = "interactive"
+        out["interactive"] = {"button_reply": {"id": btn.get("payload") or btn.get("id") or ""}}
+        out["text"] = btn.get("text", text)
     return out

@@ -116,6 +116,7 @@ class Store(Protocol):
 
     # goals (Fix 04, Fix 05)
     async def get_goal(self, goal_id: str) -> Goal: ...
+    async def get_stale_goals(self, statuses: list[str], older_than_minutes: int) -> list[Goal]: ...
     async def get_goal_state(self, goal_id: str) -> str: ...
     async def set_goal_state(self, goal_id: str, to_state: str, payload: dict | None = None) -> None: ...
     async def update_goal_options(self, goal_id: str, options: list) -> None: ...
@@ -215,6 +216,11 @@ class InMemoryStore:
 
     async def get_goal(self, goal_id: str) -> Goal:
         return self._goals[goal_id]
+
+    async def get_stale_goals(self, statuses, older_than_minutes):
+        # In-memory has no per-goal timestamp, so age is ignored (dev/test only);
+        # the worker runs against SupabaseStore, which filters by updated_at.
+        return [g for g in self._goals.values() if g.status in statuses]
 
     async def get_goal_state(self, goal_id: str) -> str:
         return self._goals[goal_id].status
@@ -510,6 +516,13 @@ class SupabaseStore:
         if r is None:
             raise KeyError(goal_id)
         return self._to_goal(r)
+
+    async def get_stale_goals(self, statuses, older_than_minutes):
+        rows = await self._rows(
+            "SELECT * FROM goals WHERE status = ANY($1::text[]) "
+            "AND updated_at < now() - make_interval(mins => $2) ORDER BY updated_at",
+            list(statuses), int(older_than_minutes))
+        return [self._to_goal(r) for r in rows]
 
     async def get_goal_state(self, goal_id) -> str:
         s = await self._val("SELECT status FROM goals WHERE id=$1::uuid", goal_id)

@@ -23,7 +23,7 @@ from services.payment import issue_volopay_payment
 
 log = logging.getLogger(__name__)
 
-_default_store: Store = SupabaseStore()
+from core.store import get_store  # lazy shared store (no eager SupabaseStore; avoids split-brain)
 
 # ── Fix 03 — GST buffer ─────────────────────────────────────────────────────
 GST_BUFFER_MULTIPLIER = 1.28   # covers the maximum 28% GST slab in India
@@ -90,7 +90,7 @@ async def execute_payment_with_budget_check(
     well-defined. Everything else matches the spec: re-read budget + spent inside
     the lock, block if over budget, pay INSIDE the lock, then record the spend.
     """
-    store = store or _default_store
+    store = store or get_store()
 
     async with budget_lock(company_id, category, redis=redis):
         budget = await store.get_budget(company_id, category)

@@ -17,9 +17,9 @@ from enum import Enum
 from core.clients import get_redis
 from core.db import SupabaseStore, Store
 
-# Default production store. Tests pass their own Store (InMemoryStore) via the
-# `store=` parameter; runtime wiring of SupabaseStore happens in Phase 2.
-_default_store: Store = SupabaseStore()
+# Default store = lazy shared singleton (get_store); tests pass store= explicitly.
+# Lazy avoids an eager SupabaseStore at import diverging from the request path (split-brain).
+from core.store import get_store
 
 
 class GoalState(str, Enum):
@@ -123,7 +123,7 @@ async def transition_goal_state(
     Returns True iff this call performed the transition.
     """
     redis = redis or get_redis()
-    store = store or _default_store
+    store = store or get_store()
 
     # Accept either a GoalState enum or a plain string; normalize to the value.
     from_state, to_state = _as_value(from_state), _as_value(to_state)

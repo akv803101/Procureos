@@ -25,7 +25,7 @@ from services.slack_notifier import build_approval_blocks, send_approval
 
 log = logging.getLogger(__name__)
 
-_default_store: Store = SupabaseStore()
+from core.store import get_store  # lazy shared store (no eager SupabaseStore; avoids split-brain)
 
 # Rank + request approval once we have at least this many quotes. The RFQ-timeout
 # worker ranks with fewer if vendors go silent past the deadline (later increment).
@@ -214,7 +214,7 @@ async def process_goal(goal_id: str, *, store: Store | None = None, redis=None,
     (-> approve_goal). Moves the goal processing -> pending_rfq (or
     -> operator_escalated if no vendors are found).
     """
-    store = store or _default_store
+    store = store or get_store()
     goal = await store.get_goal(goal_id)
     intent = goal.parsed_intent or {}
 
@@ -270,7 +270,7 @@ async def on_quote_collected(goal_id: str, quote: dict, *, store: Store | None =
                              redis=None, router=llm_router, slack_send_fn=None) -> dict:
     """A parsed vendor quote arrived. Store it; once enough quotes are in, rank
     them and send the approval card. Idempotent on the state transitions."""
-    store = store or _default_store
+    store = store or get_store()
     await store.add_collected_quote(goal_id, quote)
     quotes = await store.get_collected_quotes(goal_id)
 
