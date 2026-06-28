@@ -32,11 +32,6 @@ log = logging.getLogger(__name__)
 COMPANY_CITY = "Bengaluru"
 TOP_N = 5
 CHAT_MODEL = "claude-sonnet-4-6"
-TEMPLATE_BODY = (
-    "Hi {0}, this is IntelliBridge Procurement. We're sourcing {1} for delivery "
-    "in {2}, needed by {3}. If you can supply, please reply here with your best "
-    "price (incl. GST) and availability. Quote ref: {4}. Thanks!"
-)
 
 SYSTEM = """You are ProcureOS, a procurement assistant for IntelliBridge, an Indian \
 company based in Bengaluru. Employees chat with you in plain language to buy things \
@@ -74,9 +69,13 @@ you called find_vendors in THIS turn. If you can't regenerate it, say plainly th
 displayed draft still shows the old details and the team should adjust before sending.
 
 MANDATORY before searching: category, quantity, delivery city/area, AND the exact \
-delivery address (building / floor / area + landmark). Budget is OPTIONAL. A date is \
-needed only for dated events. Do NOT assume the delivery city from the company HQ — ask \
-which city/area, and never pre-write a city (e.g. "in Bengaluru") into your questions.
+delivery address (building / floor / area + landmark). A date is needed only for dated \
+events. Do NOT assume the delivery city from the company HQ — ask which city/area, and \
+never pre-write a city (e.g. "in Bengaluru") into your questions.
+ALWAYS ASK for a budget once (a per-unit / per-person target or a total) — it is optional \
+to ANSWER (the user may say "skip" / "open to best quote" and you proceed), but you must \
+ask, because without a budget in the RFQ vendors quote blind and it causes avoidable \
+back-and-forth. Whatever the user gives (or skips) is carried into the RFQ automatically.
 
 ALSO gather the few attributes that materially change WHICH vendor fits and the price — \
 this is how you vet well and avoid a generic list. Ask them conversationally (2-3 at a \
@@ -243,23 +242,27 @@ async def _assess_risk(vendors: list[dict]) -> None:
 
 def _draft_rfq(intent: dict, vendor_name: str, code: str) -> str:
     """Render the RFQ, phrased per category — delivery goods/catering use 'for delivery
-    in …, needed by …'; hotels/flights are NOT deliveries and get stay/travel phrasing
-    (otherwise a 2-night room block reads as a single-date delivery)."""
+    in …, needed by …'; hotels/flights are NOT deliveries and get stay/travel phrasing.
+    Always conveys the budget (or 'open to best quote') so vendors don't quote blind."""
     cat = (intent.get("category") or "").lower()
     v, requirement, place, needed_by, c = _rfq_template_params(vendor_name, intent, code)
+    b = intent.get("budget_hint")
+    budget = f" Our indicative budget is {b}." if b else " We're open to your best competitive quote."
     if cat == "hotel":
         ci = intent.get("check_in") or needed_by
         co = intent.get("check_out") or "TBD"
         rooms = intent.get("rooms")
         rooms_clause = f" ({int(rooms)} rooms)" if rooms else ""
         return (f"Hi {v}, this is IntelliBridge Procurement. We're sourcing {requirement} near "
-                f"{place} for check-in {ci} to check-out {co}{rooms_clause}. Please reply with your "
-                f"best per-room-night rate (incl. GST) and availability. Quote ref: {c}. Thanks!")
+                f"{place} for check-in {ci} to check-out {co}{rooms_clause}.{budget} Please reply with "
+                f"your best per-room-night rate (incl. GST) and availability. Quote ref: {c}. Thanks!")
     if cat == "flights":
         return (f"Hi {v}, this is IntelliBridge Procurement. We're arranging {requirement} for travel "
-                f"around {needed_by}. Please reply with fares (incl. GST), baggage, and availability. "
-                f"Quote ref: {c}. Thanks!")
-    return TEMPLATE_BODY.format(v, requirement, place, needed_by, c)
+                f"around {needed_by}.{budget} Please reply with fares (incl. GST), baggage, and "
+                f"availability. Quote ref: {c}. Thanks!")
+    return (f"Hi {v}, this is IntelliBridge Procurement. We're sourcing {requirement} for delivery in "
+            f"{place}, needed by {needed_by}.{budget} Please reply with your best price (incl. GST) and "
+            f"availability. Quote ref: {c}. Thanks!")
 
 
 async def _find_vendors(args: dict) -> tuple[str, dict]:
