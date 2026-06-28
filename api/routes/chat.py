@@ -13,6 +13,7 @@ Session history is in-memory (demo only) keyed by a client-generated session id.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -105,10 +106,12 @@ reviewers say about quality, service, timeliness), AND a structured service-risk
 (level low/medium/high/unknown, a 0-100 service score, + delivery/service/quality signals) \
 derived ONLY from that summary. Vendors are already ordered best-vetted-first. USE this data \
 — you DO have their contact details, so never say you can't show them. Lead with the low-risk \
-/ high-score vendors and treat 'unknown' as "no review data yet" (unproven, NOT bad). NEVER \
-default the RFQ to a HIGH-risk vendor — surface high-risk ones separately as flagged / not \
-recommended, with the grounded reason, and only address the RFQ to one if the user explicitly \
-insists. Never rate a vendor better or worse than its summary supports. When asked about quality, delivery, \
+/ high-score vendors. Present 'unknown' risk / missing review summary strictly as "no review \
+data yet (unproven, not a negative signal)" — NEVER with ⚠️, "flag", "concern", or "worth \
+confirming"; reserve warning language ONLY for risk level 'high'. NEVER default the RFQ to a \
+HIGH-risk vendor — surface high-risk ones separately as flagged / not recommended, with the \
+grounded reason, and only address the RFQ to one if the user explicitly insists. Never rate a \
+vendor better or worse than its summary supports. When asked about quality, delivery, \
 after-sales or complaints, READ the review summary and give a grounded, comparative answer: \
 cite what each summary says, call out any weak/negative service or delivery signals, and \
 rank who looks strongest for THIS order. Frame it as "based on Google's review summary" — \
@@ -124,8 +127,11 @@ RFQ as a question to the vendor — do NOT restart the conversation.
 When you have the mandatory fields AND the key attributes, craft a FOCUSED Google search \
 phrase in `search_terms` reflecting them (e.g. "non-veg North Indian corporate caterers") \
 so discovery returns well-matched vendors, and put ONLY the item spec / attributes (cuisine, \
-config, serving style, etc.) in `special_requirements` — NOT budget, GST, dates, or delivery, \
-which are added to the RFQ automatically. Then call find_vendors. Present results warmly and concisely (the \
+config, serving style, etc.) in `special_requirements` — NOT budget, GST, dates, or delivery \
+details, which are handled separately. Floor / tower / building details belong ONLY in \
+`delivery_address`, never in `special_requirements`. If the user CHANGES the venue, restate the \
+full new `delivery_address` from scratch and DROP any floor/tower reference tied to the old \
+venue, then call find_vendors again. Then call find_vendors. Present results warmly and concisely (the \
 UI shows the cards + drafted message — don't repeat the list verbatim; summarise and say \
 what's next: pick one or send to all). If the employee changes anything (quantity, date, \
 veg/non-veg, cuisine, address), update and call find_vendors again."""
@@ -286,7 +292,7 @@ def _draft_rfq(intent: dict, vendor_name: str, code: str) -> str:
     needed_clause = f", needed by {nb}" if nb else ", please share your earliest available timeline"
     # Carry the gathered spec verbatim so vendors quote on the real requirement.
     spec = intent.get("special_requirements")
-    spec_clause = f" Spec: {spec}." if spec else ""
+    spec_clause = f" Spec: {spec.rstrip(' .')}." if spec else ""   # avoid a double period
     b = intent.get("budget_hint")
     # Budget visibility is the user's choice: 'show' reveals an indicative figure (fewer
     # rounds), 'internal' keeps it private (better price discovery). Default: show.
@@ -360,10 +366,92 @@ async def _find_vendors(args: dict) -> tuple[str, dict]:
     return summary, {"vendors": cards, "rfq": rfq}
 
 
+# ── provider-resilient agent step (Anthropic primary, Groq fallback) ────────────
+# The chat path was a single point of failure: a direct Anthropic call with no
+# fallback, so an outage / exhausted credits killed every turn. We now try
+# Anthropic (best quality) then fall back to Groq, mirroring the goal pipeline's
+# llm_router resilience. History is stored in canonical (Anthropic-shaped) blocks
+# and converted to OpenAI/Groq format on demand.
+_CHAT_FALLBACK_MODEL = "llama-3.3-70b-versatile"
+
+
+def _openai_tools() -> list[dict]:
+    return [{"type": "function", "function": {
+        "name": FIND_VENDORS_TOOL["name"], "description": FIND_VENDORS_TOOL["description"],
+        "parameters": FIND_VENDORS_TOOL["input_schema"]}}]
+
+
+def _to_openai_messages(system: str, history: list) -> list:
+    msgs = [{"role": "system", "content": system}]
+    for m in history:
+        role, content = m["role"], m["content"]
+        if isinstance(content, str):
+            msgs.append({"role": role, "content": content})
+        elif role == "assistant":
+            text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
+            tcs = [{"id": b["id"], "type": "function",
+                    "function": {"name": b["name"], "arguments": json.dumps(b["input"])}}
+                   for b in content if b.get("type") == "tool_use"]
+            msg = {"role": "assistant", "content": text or None}
+            if tcs:
+                msg["tool_calls"] = tcs
+            msgs.append(msg)
+        else:  # user turn carrying tool_result blocks
+            for b in content:
+                if b.get("type") == "tool_result":
+                    msgs.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": b["content"]})
+    return msgs
+
+
+def _normalize(text: str, tool_uses: list) -> dict:
+    blocks = ([{"type": "text", "text": text}] if text else [])
+    blocks += [{"type": "tool_use", "id": t["id"], "name": t["name"], "input": t["input"]} for t in tool_uses]
+    return {"assistant_blocks": blocks, "tool_calls": tool_uses, "text": text or ""}
+
+
+async def _complete_anthropic(system: str, history: list) -> dict:
+    from anthropic import AsyncAnthropic
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    resp = await client.messages.create(model=CHAT_MODEL, max_tokens=1024, temperature=0,
+                                        system=system, tools=[FIND_VENDORS_TOOL], messages=history)
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    tool_uses = [{"id": b.id, "name": b.name, "input": b.input}
+                 for b in resp.content if b.type == "tool_use"]
+    return _normalize(text, tool_uses)
+
+
+async def _complete_groq(system: str, history: list) -> dict:
+    import groq
+    client = groq.Groq(api_key=settings.groq_api_key)
+
+    def _call():
+        return client.chat.completions.create(
+            model=_CHAT_FALLBACK_MODEL, max_tokens=1024, temperature=0,
+            messages=_to_openai_messages(system, history), tools=_openai_tools(), tool_choice="auto")
+    resp = await asyncio.to_thread(_call)
+    msg = resp.choices[0].message
+    tool_uses = [{"id": tc.id, "name": tc.function.name, "input": json.loads(tc.function.arguments or "{}")}
+                 for tc in (msg.tool_calls or [])]
+    return _normalize(msg.content or "", tool_uses)
+
+
+_CHAT_PROVIDERS = [("anthropic", _complete_anthropic), ("groq", _complete_groq)]
+
+
+async def _agent_complete(system: str, history: list) -> dict:
+    """Run one agent step on the first provider that succeeds; raise if all fail."""
+    last_err = None
+    for name, fn in _CHAT_PROVIDERS:
+        try:
+            return await fn(system, history)
+        except Exception as e:  # noqa: BLE001 — fall through to the next provider
+            last_err = e
+            log.warning("chat provider %s failed: %s", name, str(e)[:200])
+    raise last_err
+
+
 @router.post("/chat/message")
 async def chat_message(request: Request) -> dict:
-    from anthropic import AsyncAnthropic
-
     body = await request.json()
     session = body.get("session", "default")
     text = (body.get("message") or "").strip()
@@ -376,42 +464,36 @@ async def chat_message(request: Request) -> dict:
     history = _SESSIONS.setdefault(session, [])
     history.append({"role": "user", "content": text})
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     system = SYSTEM.format(today=date.today().isoformat())
     ui_data: dict = {}
 
     try:
         for _ in range(5):  # allow a tool round-trip or two
-            resp = await client.messages.create(
-                model=CHAT_MODEL, max_tokens=1024, temperature=0,
-                system=system, tools=[FIND_VENDORS_TOOL], messages=history,
-            )
-            # Persist the assistant turn (reconstruct clean blocks for re-sending).
-            assistant_blocks: list = []
-            for b in resp.content:
-                if b.type == "text":
-                    assistant_blocks.append({"type": "text", "text": b.text})
-                elif b.type == "tool_use":
-                    assistant_blocks.append({"type": "tool_use", "id": b.id,
-                                             "name": b.name, "input": b.input})
-            history.append({"role": "assistant", "content": assistant_blocks})
-
-            if resp.stop_reason == "tool_use":
+            result = await _agent_complete(system, history)
+            history.append({"role": "assistant", "content": result["assistant_blocks"]})
+            if result["tool_calls"]:
                 results = []
-                for b in resp.content:
-                    if b.type == "tool_use" and b.name == "find_vendors":
-                        summary, data = await _find_vendors(b.input)
+                for tc in result["tool_calls"]:
+                    if tc["name"] == "find_vendors":
+                        summary, data = await _find_vendors(tc["input"])
                         ui_data = data
-                        results.append({"type": "tool_result", "tool_use_id": b.id, "content": summary})
+                        results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": summary})
                 history.append({"role": "user", "content": results})
                 continue
-
-            reply = "".join(b.text for b in resp.content if b.type == "text").strip()
-            return {"reply": reply or "…", "done": bool(ui_data), **ui_data}
-    except Exception:  # noqa: BLE001 — never leak raw upstream errors to the user
-        log.exception("chat agent error")  # full detail (incl. request_id) stays server-side
-        return {"reply": "Sorry — something went wrong on my end. Could you say that again?",
-                "done": False}
+            return {"reply": result["text"] or "…", "done": bool(ui_data), **ui_data}
+    except Exception as e:  # noqa: BLE001 — all providers failed; surface a useful reason
+        log.exception("chat agent error (all providers)")  # full detail stays server-side
+        m = str(e).lower()
+        if any(k in m for k in ("credit", "billing", "quota", "insufficient")):
+            reply = ("⚠️ The assistant is temporarily unavailable — the LLM provider account is out "
+                     "of credits. Please top up Anthropic (or Groq) credits and try again.")
+        elif "rate" in m or "429" in m:
+            reply = "I'm a bit overloaded right now — give it a few seconds and try again."
+        elif any(k in m for k in ("auth", "401", "api key", "api_key", "permission")):
+            reply = "⚠️ The assistant is misconfigured (LLM auth failed). Please check the provider API keys."
+        else:
+            reply = "Sorry — something went wrong on my end. Could you say that again?"
+        return {"reply": reply, "done": False}
 
     return {"reply": "Sorry, I got stuck — could you rephrase?", "done": False}
 
@@ -462,7 +544,8 @@ _CHAT_HTML = """<!doctype html>
   function bubble(who, html){ const r=document.createElement('div'); r.className='row '+who;
     r.innerHTML='<div class="bubble">'+html+'</div>'; log.appendChild(r); log.scrollTop=log.scrollHeight; return r; }
   function riskBadge(r){ if(!r||!r.level) return '';
-    var c={low:'#2ea043',medium:'#d29922',high:'#f85149',unknown:'#6e7681'}[r.level]||'#6e7681';
+    if(r.level==='unknown') return ' <span style="background:#3a4150;color:#aab6cc;font-size:11px;padding:1px 7px;border-radius:6px">unproven</span>';
+    var c={low:'#2ea043',medium:'#d29922',high:'#f85149'}[r.level]||'#6e7681';
     var s=(typeof r.score==='number')?' '+r.score+'/100':'';
     return ' <span style="background:'+c+';color:#fff;font-size:11px;padding:1px 7px;border-radius:6px">risk: '+esc(r.level)+s+'</span>'; }
   function vendorsHtml(vs){ if(!vs||!vs.length) return '';

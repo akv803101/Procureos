@@ -37,6 +37,11 @@ def test_budget_show_is_revealed():
     assert "indicative budget is 90k/unit" in r
 
 
+def test_rfq_no_double_period_when_spec_ends_with_period():
+    r = _draft_rfq(_laptop_intent(special_requirements="i7, 32GB, 1TB SSD."), "V", "C0DE1234")
+    assert ".." not in r          # spec's trailing period must not collide with the clause period
+
+
 def test_address_gate_rejects_area_landmark():
     assert _address_is_specific("Koramangala, near Forum Mall") is False
     assert _address_is_specific("Bengaluru") is False
