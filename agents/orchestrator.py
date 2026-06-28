@@ -93,8 +93,10 @@ def _human_requirement(intent: dict) -> str:
     return f"{item} for {qty} people" if cat in _PEOPLE_BASED else f"{qty} {item}"
 
 
-def _human_needed_by(intent: dict) -> str:
-    """A firm date ('5 Jul 2026') when the goal names one, else friendly urgency."""
+def _human_needed_by(intent: dict) -> str | None:
+    """A firm date ('5 Jul 2026') when the goal names one, else the mapped urgency,
+    else None. NEVER defaults to a concrete deadline — fabricating 'this week' onto a
+    dateless order injects a requirement the user never gave into the buyer-facing RFQ."""
     raw = intent.get("needed_by")
     if raw:
         try:
@@ -103,7 +105,7 @@ def _human_needed_by(intent: dict) -> str:
         except (ValueError, TypeError):
             return str(raw)
     return {"asap": "as soon as possible", "this_week": "this week",
-            "flexible": "a flexible date"}.get(intent.get("urgency"), "this week")
+            "flexible": "a flexible date"}.get(intent.get("urgency"))  # None if no date/urgency
 
 
 def clarifying_questions(intent: dict) -> list[dict]:
@@ -137,8 +139,10 @@ def _delivery_place(intent: dict) -> str:
 def _rfq_template_params(vendor_name: str, intent: dict, code: str) -> list[str]:
     """Fill rfq_first_contact_v1 body vars {{1}}..{{5}} in order:
     vendor name, requirement, delivery place, needed-by, quote ref."""
+    # The Meta WhatsApp template var {{4}} must be a non-empty string, so coalesce a
+    # missing date to a neutral phrase here (the chat RFQ builder handles None itself).
     return [vendor_name, _human_requirement(intent), _delivery_place(intent),
-            _human_needed_by(intent), code]
+            _human_needed_by(intent) or "your earliest availability", code]
 
 
 async def generate_rfq(vendor_name: str, intent: dict, ref_code: str, budget,
