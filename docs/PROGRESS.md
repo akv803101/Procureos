@@ -1,12 +1,13 @@
 # ProcureOS — Progress
 
-_Last updated: 2026-06-28 · 152 tests passing · see also [capability_map.html](capability_map.html)_
+_Last updated: 2026-07-16 · 156 tests passing · see also [capability_map.html](capability_map.html)_
 
 ## TL;DR
 The **agent brain + backend are built and battle-tested** (survived 4 adversarial
-red-team rounds). The **chat now creates real, persisted procurement goals**. The
-end-to-end live loop is **one step from closing** — gated only on a **Chat Mitra plan
-upgrade** (to unlock inbound webhooks) + **Meta template approval**.
+red-team rounds). The **chat now creates real goals, DISPATCHES the WhatsApp RFQ, and
+streams vendor replies back into the chat live**. The full send → reply → quote loop is
+**code-complete**; going live now needs only **provisioning** — a public tunnel, the
+Chat Mitra webhook + signing secret, and Meta template approval (Chat Mitra Pro is done).
 
 ---
 
@@ -19,8 +20,8 @@ upgrade** (to unlock inbound webhooks) + **Meta template approval**.
 | 4 | Vetting & ranking | ✅ live | credibility rank + Google review-summary sentiment + 0–100 service-risk score; high-risk auto-excluded |
 | 5 | Draft RFQ | ✅ live | category-aware (delivery/hotel/flight); budget reveal is user-selectable |
 | 6 | Save goal (chat→pipeline) | ✅ live | on confirm: real persisted goal + per-goal REF, → `pending_rfq` |
-| 7 | Outreach (send) | 🟡 gated | WhatsApp template send built; **dispatch flip gated on Chat Mitra upgrade** |
-| 8 | Collect quotes (inbound) | 🟡 gated | Chat Mitra adapter built (`X-Webhook-Signature`/`hmac_sha256`/`message.received`); **needs webhook live** |
+| 7 | Outreach (send) | ✅ built | on confirm: persists chosen vendor + **dispatches the approved template** via `dispatch_rfqs`; `RFQ_TEST_RECIPIENT` self-test valve; needs Meta template approval to deliver |
+| 8 | Collect quotes (inbound) | ✅ built | webhook → REF attribution → parse → store → **replies stream into chat** (`GET /chat/updates` poller); needs webhook URL + secret live |
 | 9 | Rank options | ✅ live | + `rfq_timeout` worker so a single/slow reply never dead-ends |
 | 10 | Approve | ✅ live | Slack Block Kit, HMAC, magic-link tokens |
 | 11 | Pay | 🟡 test-mode | Razorpay test client; LIVE keys pending |
@@ -33,10 +34,10 @@ upgrade** (to unlock inbound webhooks) + **Meta template approval**.
 - **A0b — Chat Mitra inbound spike:** ✅ scheme known + adapter built; awaiting one real webhook to pin the exact payload (route logs it).
 - **A1 — chat → real goal pipeline:** ✅ done (verified live).
 - **A2 — split-brain fix + single-vendor dead-end:** ✅ done (lazy `get_store`; `rfq_timeout` worker).
-- **A3 — live reply hub (replies stream into chat):** ⏳ gated on inbound being live.
-- **A4 — tunnel + webhook registration + one real round-trip:** ⏳ gated on A0.
+- **A3 — live reply hub (replies stream into chat):** ✅ done — confirm dispatches the template + persists the vendor; `GET /chat/updates` surfaces inbound quotes; end-to-end wiring covered by `tests/integration/test_live_loop.py`.
+- **A4 — tunnel + webhook registration + one real round-trip:** ⏳ provisioning only (Chat Mitra Pro done; needs tunnel + webhook URL/secret + Meta template approval).
 
-**Gated on the Chat Mitra upgrade:** flip "queued" → actual WhatsApp dispatch · the live reply hub · paste `META_WEBHOOK_SECRET`.
+**Provisioning to close the loop:** public tunnel → Chat Mitra webhook (`/webhook/whatsapp`, `message.received`) → paste `META_WEBHOOK_SECRET` → approve Meta template `rfq_first_contact_v1`. Set `RFQ_TEST_RECIPIENT` to self-test first. One caveat to confirm on the first real send: Chat Mitra's exact send endpoint/payload (only `services/whatsapp._default_send_template` changes if it differs).
 
 ---
 

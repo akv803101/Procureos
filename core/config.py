@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     chat_mitra_base_url: str = "https://api.chatmitra.io/v1"  # confirm against Chat Mitra docs
     meta_webhook_secret: str = ""          # HMAC verify of inbound WhatsApp webhooks
     meta_webhook_verify_token: str = ""    # WhatsApp webhook URL verification (GET challenge)
+    # Live-test safety valve: when set, every outbound RFQ is routed to THIS number
+    # (one vendor only) instead of the real vendor's phone, so you can self-test the
+    # full send -> reply -> quote loop without messaging real businesses. The message
+    # still names the real vendor and carries the real REF. Leave empty to go fully live.
+    rfq_test_recipient: str = ""
 
     # Payment (Volopay)
     volopay_api_key: str = ""
